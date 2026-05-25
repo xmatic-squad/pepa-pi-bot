@@ -8,6 +8,15 @@ import type { Bot } from "mineflayer";
 const require = createRequire(import.meta.url);
 const dotenv = require("dotenv") as typeof import("dotenv");
 const mineflayer = require("mineflayer") as typeof import("mineflayer");
+
+// mcdata is an ES module; load it lazily via dynamic import on first use to
+// avoid the "Cannot require() ES Module ... not yet fully loaded" race when
+// Pi loads multiple extensions in parallel.
+let mcdataPromise: Promise<{ attachPluginsAndInit: (bot: any) => any }> | null = null;
+function loadMcdata() {
+	if (!mcdataPromise) mcdataPromise = import("./lib/mcdata.js" as any) as Promise<{ attachPluginsAndInit: (bot: any) => any }>;
+	return mcdataPromise;
+}
 const pathfinderModule = require("mineflayer-pathfinder") as {
 	pathfinder: (bot: Bot) => void;
 	Movements: new (bot: Bot) => any;
@@ -88,6 +97,12 @@ interface BuildPyramidInput {
 	z: number;
 	material?: string;
 	dry_run?: boolean;
+}
+
+interface DigInput {
+	x: number;
+	y: number;
+	z: number;
 }
 
 type MemoryAction = "set_current_task" | "clear_current_task" | "append_diary" | "register_location";
@@ -223,6 +238,17 @@ const BUILD_PYRAMID_PARAMS = {
 			type: "boolean",
 			description: "If true, check distance/path/inventory without moving or placing blocks.",
 		},
+	},
+	required: ["x", "y", "z"],
+	additionalProperties: false,
+} as const;
+
+const DIG_PARAMS = {
+	type: "object",
+	properties: {
+		x: { type: "number", description: "Block X coordinate to dig." },
+		y: { type: "number", description: "Block Y coordinate to dig." },
+		z: { type: "number", description: "Block Z coordinate to dig." },
 	},
 	required: ["x", "y", "z"],
 	additionalProperties: false,
@@ -1081,6 +1107,13 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 		}
 
 		bot = nextBot;
+		(globalThis as any).__pepaPiBot = nextBot;
+		// Attach Mindcraft-required plugins (pathfinder, pvp, collectblock,
+		// armorManager) and prime mc_version once login completes. Skill calls
+		// from mindcraft-skills.ts rely on this. Loaded lazily as ESM.
+		loadMcdata()
+			.then((m) => { try { m.attachPluginsAndInit(nextBot); } catch (e) { log("plugin-init-error", e); } })
+			.catch((e) => log("mcdata-load-error", e));
 		nextBot.once("login", () => {
 			setConnectionState("connected");
 		});
@@ -1122,7 +1155,7 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 			lastDisconnectReason = `error: ${truncate(redact(stringifyUnknown(error), current), 200)}`;
 			activeWorldTask = undefined;
 			stopAuthTimer();
-			if (bot === nextBot) bot = undefined;
+			if (bot === nextBot) { bot = undefined; (globalThis as any).__pepaPiBot = undefined; }
 			setConnectionState("disconnected");
 			try {
 				nextBot.end("connection error");
@@ -1135,7 +1168,7 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 		nextBot.on("end", (reasonText) => {
 			activeWorldTask = undefined;
 			stopAuthTimer();
-			if (bot === nextBot) bot = undefined;
+			if (bot === nextBot) { bot = undefined; (globalThis as any).__pepaPiBot = undefined; }
 			const reasonString = stringifyUnknown(reasonText || lastDisconnectReason || "end");
 			lastDisconnectReason = reasonString;
 			if (manualDisconnectRequested || shuttingDown) {
@@ -1161,6 +1194,7 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 		}
 		const currentBot = bot as Bot & { quit?: (reason?: string) => void; end?: (reason?: string) => void };
 		bot = undefined;
+		(globalThis as any).__pepaPiBot = undefined;
 		setConnectionState("disconnected");
 		if (typeof currentBot.quit === "function") {
 			currentBot.quit();
@@ -1862,6 +1896,31 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 					gameMode: currentBot.game.gameMode,
 					authObservation,
 				},
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "mc_dig",
+		label: "Minecraft Dig Block",
+		description: "Dig one block at exact coordinates using Mineflayer bot.dig(bot.blockAt(new Vec3(x,y,z))).",
+		promptSnippet: "Dig one block at exact Minecraft coordinates.",
+		parameters: DIG_PARAMS,
+		executionMode: "sequential",
+		async execute(_toolCallId, params: DigInput) {
+			const currentBot = activeBot();
+			const pos = new Vec3(
+				Math.floor(finiteNumber(params.x, "x")),
+				Math.floor(finiteNumber(params.y, "y")),
+				Math.floor(finiteNumber(params.z, "z")),
+			);
+			const block = currentBot.blockAt(pos);
+			if (!block) throw new Error(`No loaded block at ${pos.x},${pos.y},${pos.z}.`);
+			if (block.name === "air") throw new Error(`Block at ${pos.x},${pos.y},${pos.z} is air.`);
+			await currentBot.dig(block);
+			return {
+				content: [{ type: "text", text: `Dug ${block.name} at x=${pos.x}, y=${pos.y}, z=${pos.z}.` }],
+				details: { x: pos.x, y: pos.y, z: pos.z, block: block.name },
 			};
 		},
 	});
