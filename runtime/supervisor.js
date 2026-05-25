@@ -16,6 +16,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { stateDir } from "./config.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const RUNTIME_DIR = __dirname;
@@ -25,12 +27,55 @@ export const RELOAD_EXIT_CODE = 42;
 const WATCH_DEBOUNCE_MS = 800;
 const MAX_RESTARTS_PER_MINUTE = 5;
 
+// Pidfile prevents two supervisors from racing on the same MC nickname. The
+// Minecraft server refuses the second login ("Игрок с данным никнеймом уже
+// играет на сервере") and the loser enters a kick-reconnect loop forever.
+// Observed live 2026-05-25 when a smoke-test bot stayed alive in the
+// background after its operator window was closed.
+const PID_FILE = path.join(stateDir, "supervisor.pid");
+
 let child = null;
 let restartingDueToWatch = false;
 const restartTimestamps = [];
 
 function nowMs() {
 	return Date.now();
+}
+
+function isProcessAlive(pid) {
+	try {
+		// Signal 0 doesn't kill — just probes existence + permission.
+		process.kill(pid, 0);
+		return true;
+	} catch (e) {
+		return e.code === "EPERM"; // exists but we don't own it
+	}
+}
+
+function acquireLock() {
+	try {
+		const existing = Number.parseInt(fs.readFileSync(PID_FILE, "utf8").trim(), 10);
+		if (Number.isFinite(existing) && existing !== process.pid && isProcessAlive(existing)) {
+			console.error(
+				`[supervisor] another supervisor (pid=${existing}) is already running. ` +
+					`Stop it first ('kill ${existing}') or delete ${PID_FILE} if it's stale.`,
+			);
+			process.exit(2);
+		}
+	} catch (e) {
+		if (e.code !== "ENOENT") {
+			console.error(`[supervisor] could not read pidfile: ${e.message}`);
+		}
+	}
+	fs.mkdirSync(stateDir, { recursive: true });
+	fs.writeFileSync(PID_FILE, String(process.pid));
+}
+
+function releaseLock() {
+	try {
+		const pid = Number.parseInt(fs.readFileSync(PID_FILE, "utf8").trim(), 10);
+		if (pid === process.pid) fs.unlinkSync(PID_FILE);
+	} catch {}
 }
 
 function spawnChild() {
@@ -88,6 +133,7 @@ function watchRuntime() {
 for (const sig of ["SIGINT", "SIGTERM"]) {
 	process.on(sig, () => {
 		console.log(`[supervisor] forwarding ${sig} to child`);
+		releaseLock();
 		if (!child) process.exit(0);
 		child.once("exit", () => process.exit(0));
 		child.kill(sig);
@@ -96,6 +142,10 @@ for (const sig of ["SIGINT", "SIGTERM"]) {
 	});
 }
 
-console.log(`[supervisor] starting; watching ${RUNTIME_DIR} for *.js changes`);
+// Best-effort lock release on any other exit path (uncaught, exit 1, etc).
+process.on("exit", releaseLock);
+
+acquireLock();
+console.log(`[supervisor] starting (pid=${process.pid}); watching ${RUNTIME_DIR} for *.js changes`);
 spawnChild();
 watchRuntime();

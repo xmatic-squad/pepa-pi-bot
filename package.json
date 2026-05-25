@@ -14,7 +14,8 @@
     "bot": "node runtime/supervisor.js",
     "bot:bare": "node runtime/bot.js",
     "tui": "tsx tui/tui.tsx",
-    "propose:apply": "node scripts/propose-apply.js"
+    "propose:apply": "node scripts/propose-apply.js",
+    "stop": "bash scripts/stop.sh"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
