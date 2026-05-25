@@ -73,6 +73,57 @@ export function appendDiary(text) {
 	fs.appendFileSync(diaryPath(), line);
 }
 
+// Tail N most-recent diary lines from today's file. Returns the most-recent
+// line (or null if the day's diary is empty / missing). Cheap enough to
+// call from the chat reply path.
+export function readDiaryTail(n = 1) {
+	try {
+		const raw = fs.readFileSync(diaryPath(), "utf8");
+		const lines = raw.split("\n").filter((l) => l.trim());
+		if (lines.length === 0) return null;
+		return lines.slice(-n).join("\n");
+	} catch (e) {
+		if (e.code === "ENOENT") return null;
+		return null;
+	}
+}
+
+// ---- escalations -----------------------------------------------------------
+//
+// Per-server JSON-lines log of moments the bot chose NOT to act because the
+// request looked unsafe or out of scope. Read by future operator UIs (TUI
+// surfaces the count) and by the chat handler when Phase 5 social classifies
+// an inbound message as UNSAFE_REQUEST.
+
+const ESCALATIONS_PATH = path.join(stateDir, "escalations.jsonl");
+
+export function writeEscalation({ from, request, whyUnsure, wouldHave }) {
+	const line = JSON.stringify({
+		ts: new Date().toISOString(),
+		from,
+		request,
+		why_unsure: whyUnsure,
+		would_have: wouldHave,
+	}) + "\n";
+	fs.appendFileSync(ESCALATIONS_PATH, line);
+}
+
+export function listEscalations({ limit = 50 } = {}) {
+	try {
+		const raw = fs.readFileSync(ESCALATIONS_PATH, "utf8");
+		const lines = raw.split("\n").filter((l) => l.trim());
+		const slice = lines.slice(-limit);
+		return slice
+			.map((l) => {
+				try { return JSON.parse(l); } catch { return null; }
+			})
+			.filter(Boolean);
+	} catch (e) {
+		if (e.code === "ENOENT") return [];
+		return [];
+	}
+}
+
 // ---- proposals -------------------------------------------------------------
 
 function slugify(s) {

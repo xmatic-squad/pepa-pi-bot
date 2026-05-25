@@ -32,6 +32,8 @@ import {
 	listProposals,
 	readProposal,
 	approveProposal,
+	writeEscalation,
+	readDiaryTail,
 } from "./state-store.js";
 import { startAutoImprover } from "./auto-improve.js";
 import { startPlanner, isPlannerBusy, readNextMilestone, planExists } from "./planner.js";
@@ -39,6 +41,9 @@ import { computeState, STATES } from "./state.js";
 import { createNoProgressDetector } from "./no-progress.js";
 import { maybeStartViewer } from "./viewer.js";
 import { nextMilestone as nextCurriculumMilestone } from "./curriculum.js";
+import { classifyIntent, INTENTS } from "./social/intent.js";
+import { generateReply } from "./social/reply.js";
+import { createChatMemory } from "./social/memory.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -333,50 +338,36 @@ function maybeFileProposal(label) {
 	appendDiary(`proposal filed: ${filename} (${summary})`);
 }
 
-// ---- chat replies (dialog-only) --------------------------------------------
+// ---- chat (dialog-only via social/) ----------------------------------------
 //
-// As of Phase 0 of the survival-bot PRD, MC chat is dialog-only for everyone,
-// including OPERATOR_USERNAMES. The bot may reply socially or answer status
-// questions, but it does NOT dispatch movement/build/mining tasks from chat.
-// If a player addresses the bot with a command-like verb (come, follow, build,
-// pause, stop, give), the bot acknowledges that chat is dialog-only and
-// records the ignored command in the diary.
+// MC chat is dialog-only (Phase 0 of survival-bot PRD). Phase 5 routes
+// inbound chat through the social/ layer:
+//   1. classifyIntent() decides what the message is.
+//   2. generateReply() produces a templated reply (or signals escalate /
+//      record-ignored / record-escalation).
+//   3. We record every line in the chat memory (with redaction) so future
+//      Pi calls can quote recent context without leaking secrets.
 
 let lastChatReplyAt = 0;
 const CHAT_REPLY_COOLDOWN_MS = 30_000;
-
-const GREETING_RE = /\b(hi|hello|hey|yo|sup|hola|привет|здаров|здарова|здорова|здравствуй|здравствуйте|салам)\b/i;
-const STATUS_RE = /\b(status|how are you|what are you doing|whats up|what['’]?s up|чё делаешь|что делаешь|как ты|как дела|статус)\b/i;
-const COMMAND_LIKE_RE = /\b(come|follow|build|pause|resume|stop|go to|goto|tp|teleport|give|drop|attack|kill|dig|mine|chop|farm|harvest|sleep here|иди сюда|подойди|следуй|остановись|стоп|пауза|строй|копай|дай)\b/i;
+const chatMemory = createChatMemory();
 
 function isOperator(username) {
 	if (!username) return false;
 	return config.operators.includes(username.toLowerCase());
 }
 
-function buildStatusReply() {
-	const s = lastSnapshot;
-	const parts = [];
-	if (reflexCtx.busy) parts.push(`busy=${reflexCtx.currentActionLabel}`);
-	if (s.health !== undefined) parts.push(`hp=${s.health}/20`);
-	if (s.food !== undefined) parts.push(`food=${s.food}/20`);
-	if (s.position) parts.push(`pos=${s.position.x},${s.position.y},${s.position.z}`);
-	if (s.hostileCount) parts.push(`hostiles=${s.hostileCount}`);
-	return parts.join(" ") || "alive";
-}
-
 function handleChat(username, text) {
 	if (!bot) return;
-	const trimmed = text.trim();
-	const lower = trimmed.toLowerCase();
-	const botname = bot.username.toLowerCase();
-	const addressed = lower.includes(botname);
-	const looksLikeCommand = addressed && COMMAND_LIKE_RE.test(lower);
+	const trimmed = String(text ?? "").trim();
+	if (!trimmed) return;
 
-	// Command-like chat (from anyone, including operators) is recorded but not
-	// dispatched. We tell the speaker once per cooldown so they aren't left
-	// wondering why nothing happened.
-	if (looksLikeCommand) {
+	chatMemory.append(username, trimmed);
+
+	const intent = classifyIntent({ text: trimmed, botName: bot.username });
+
+	// Command-like chat → record + one-per-cooldown notice.
+	if (intent === INTENTS.COMMAND_LIKE) {
 		const op = isOperator(username) ? "operator" : "player";
 		info("chat", `ignored command-like chat from ${op} ${username}: ${trimmed.slice(0, 80)}`);
 		appendDiary(`ignored command-like chat from ${username}: ${trimmed.slice(0, 120)}`);
@@ -388,22 +379,41 @@ function handleChat(username, text) {
 		return;
 	}
 
-	// Dialog: greeting, status question, or addressed banter.
-	const wantsStatus = addressed && STATUS_RE.test(lower);
-	const isGreeting = GREETING_RE.test(lower);
-	if (!addressed && !isGreeting) return;
-
-	const since = Date.now() - lastChatReplyAt;
-	if (since < CHAT_REPLY_COOLDOWN_MS) return;
-	lastChatReplyAt = Date.now();
-
-	if (wantsStatus) {
-		botChat(`${username}: ${buildStatusReply()}`);
+	// Unsafe → escalation log + brief notice, no action.
+	if (intent === INTENTS.UNSAFE_REQUEST) {
+		try {
+			writeEscalation({
+				from: username,
+				request: trimmed.slice(0, 200),
+				whyUnsure: "matched unsafe pattern",
+				wouldHave: "no action",
+			});
+		} catch (e) {
+			warn("chat", `writeEscalation failed: ${e.message}`);
+		}
+		const since = Date.now() - lastChatReplyAt;
+		if (since >= CHAT_REPLY_COOLDOWN_MS) {
+			lastChatReplyAt = Date.now();
+			botChat(`${username}: not doing that. logged for operator review.`);
+		}
 		return;
 	}
-	const greetings = ["yo", "hey", "hi", "привет"];
-	const reply = greetings[Math.floor(Math.random() * greetings.length)];
-	botChat(`${username}: ${reply}`);
+
+	// Greetings / status / addressed banter → templated reply, rate-limited.
+	const since = Date.now() - lastChatReplyAt;
+	if (since < CHAT_REPLY_COOLDOWN_MS) return;
+	const diaryTail = (() => {
+		try { return readDiaryTail(1); } catch { return null; }
+	})();
+	const result = generateReply({ intent, speaker: username, snapshot: lastSnapshot, diaryTail });
+	if (result?.send) {
+		lastChatReplyAt = Date.now();
+		botChat(result.send);
+		return;
+	}
+	// Templates didn't fit and the bot was addressed (ADDRESSED_BANTER) —
+	// escalation to Pi is allowed but not done from here; future work will
+	// route through a rate-limited askPi with prompt-cached context.
 }
 
 // ---- connect ---------------------------------------------------------------
