@@ -158,9 +158,9 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 
 🌳 **Phase 0 — Body** done. Bridge online, AuthMe handled, `hello` sent. See `skills/server-onboarding.md`.
 
-🌳 **Phase 1 — Presence** implemented and operator trust wired: the bridge stays online with bounded reconnects, keeps a rolling chat buffer, exposes status/recent-chat/operator/escalation tools, applies `OPERATOR_USERNAMES` as scope-only trust, and can prompt the Pi loop to reply sparingly. Phase 5 self-extension is documented and in progress; Phase 6 escalation logging is implemented.
+🌳 **Phase 1 — Presence** implemented and operator trust wired: the bridge stays online with bounded reconnects, keeps a rolling chat buffer, exposes status/recent-chat/operator/escalation tools, applies `OPERATOR_USERNAMES` as scope-only trust, and can prompt the Pi loop to reply sparingly.
 
-🌿 **Phase 2 — Locomotion with guard rails** in progress (operator task: build a 5×5 pyramid; `mineflayer-pathfinder` installed).
+🌿 **Phase 2 — Locomotion/build rails** in progress: `mineflayer-pathfinder` is wired with guarded `mc_goto`, plus `mc_build_pyramid_5x5` for the operator-approved empty-site pyramid task. Dynamic following is still pending. Phase 5 self-extension is documented and in progress; Phase 6 escalation logging is implemented.
 
 🌱 **Phase 3 — Goal-driven autonomy** seeded: [`docs/memory-model.md`](./docs/memory-model.md) defines shared-knowledge vs personal-memory; per-server `goal.md` / `plan.md` / `current-task.json` / `diary/` shape autonomous behaviour. Kickoff via [`prompts/live-your-life.md`](./prompts/live-your-life.md).
 

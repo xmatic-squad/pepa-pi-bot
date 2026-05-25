@@ -21,9 +21,9 @@ The bot is **on the server, all the time** (except for a clean human-issued disc
 
 Stretch: short-term chat memory (last N lines) so it can reference what was just said.
 
-## Phase 2 — Locomotion with guard rails 🌱
+## Phase 2 — Locomotion with guard rails 🌿
 
-The bot can be **summoned** by chat: "come to 100 64 -200", "follow me", "go to spawn". With three hard rails:
+The bot can be **summoned** by trusted/sanctioned coordinate requests via `mc_goto`; dynamic follow is still pending. Goal: "come to 100 64 -200", "follow me", "go to spawn" with three hard rails:
 
 - **Distance bound.** Refuse trips longer than `MAX_TRAVEL_BLOCKS` (e.g. 500 blocks straight-line) from current position. Politely explain why.
 - **Focus.** While moving toward a target, ignore competing summons. Reply once with "currently on my way to X, will be free in ~N seconds." Don't context-switch mid-trip.
