@@ -10,10 +10,14 @@
   },
   "scripts": {
     "agent": "pi",
-    "agent:resume": "pi -c"
+    "agent:resume": "pi -c",
+    "bot": "node runtime/bot.js",
+    "tui": "tsx tui/tui.tsx"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
+    "ink": "^7.0.4",
+    "ink-text-input": "^6.0.0",
     "minecraft-data": "^3.110.2",
     "mineflayer": "^4.37.1",
     "mineflayer-armor-manager": "^2.0.1",
@@ -23,6 +27,7 @@
     "mineflayer-pvp": "^1.3.2",
     "mineflayer-tool": "^1.2.0",
     "prismarine-item": "^1.18.0",
+    "react": "^19.2.6",
     "vec3": "^0.2.0"
   },
   "repository": {
@@ -32,5 +37,9 @@
   "bugs": {
     "url": "https://github.com/xmatic-squad/pepa-pi-bot/issues"
   },
-  "homepage": "https://github.com/xmatic-squad/pepa-pi-bot#readme"
+  "homepage": "https://github.com/xmatic-squad/pepa-pi-bot#readme",
+  "devDependencies": {
+    "@types/react": "^19.2.15",
+    "tsx": "^4.22.3"
+  }
 }
