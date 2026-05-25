@@ -165,9 +165,19 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 	const skills = skillsMod as Record<string, (...args: any[]) => any>;
 	const world = worldMod as Record<string, (...args: any[]) => any>;
 
-	const safeCall = async <T>(label: string, fn: () => T | Promise<T>): Promise<T> => {
+	// safeCall: wraps a skill call with error labeling AND a hard timeout.
+	// Without a timeout the Mindcraft skills (defendSelf / avoidEnemies / stay
+	// / craftRecipe / etc.) can hang forever inside pathfinder / pvp loops if
+	// the goal is unreachable, blocking the entire Pi loop. Observed live:
+	// mc_avoid_enemies pending >10 min with no progress. Default 30s; callers
+	// override per-tool (goToPosition gets 120s, etc).
+	const safeCall = async <T>(
+		label: string,
+		fn: () => T | Promise<T>,
+		timeoutMs: number = 30_000,
+	): Promise<T> => {
 		try {
-			return await fn();
+			return await withTimeout(Promise.resolve().then(fn), timeoutMs, label);
 		} catch (e: unknown) {
 			const msg = e instanceof Error ? e.message : String(e);
 			throw new Error(`${label}: ${msg}`);
@@ -319,7 +329,11 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { blockType: string; x: number; y: number; z: number }) {
 			const bot = getBot();
-			const ok = await safeCall("placeBlock", () => skills.placeBlock(bot, params.blockType, params.x, params.y, params.z));
+			const ok = await safeCall(
+				"placeBlock",
+				() => skills.placeBlock(bot, params.blockType, params.x, params.y, params.z),
+				30_000,
+			);
 			return textResult(ok ? `Placed ${params.blockType} at ${params.x},${params.y},${params.z}.` : `placeBlock returned false.`, { ok, ...params });
 		},
 	});
@@ -333,8 +347,10 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { x: number; y: number; z: number; minDistance?: number }) {
 			const bot = getBot();
-			const ok = await safeCall("goToPosition", () =>
-				withTimeout(skills.goToPosition(bot, params.x, params.y, params.z, params.minDistance ?? 2), 120_000, `goToPosition(${params.x},${params.y},${params.z})`),
+			const ok = await safeCall(
+				`goToPosition(${params.x},${params.y},${params.z})`,
+				() => skills.goToPosition(bot, params.x, params.y, params.z, params.minDistance ?? 2),
+				120_000,
 			);
 			return textResult(ok ? `Arrived near ${params.x},${params.y},${params.z}.` : `goToPosition returned false.`, { ok, ...params });
 		},
@@ -349,12 +365,10 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { blockType: string; minDistance?: number; range?: number }) {
 			const bot = getBot();
-			const ok = await safeCall("goToNearestBlock", () =>
-				withTimeout(
-					skills.goToNearestBlock(bot, params.blockType, params.minDistance ?? 2, params.range ?? 64),
-					90_000,
-					`goToNearestBlock(${params.blockType})`,
-				),
+			const ok = await safeCall(
+				`goToNearestBlock(${params.blockType})`,
+				() => skills.goToNearestBlock(bot, params.blockType, params.minDistance ?? 2, params.range ?? 64),
+				90_000,
 			);
 			return textResult(ok ? `Arrived near nearest ${params.blockType}.` : `goToNearestBlock returned false for ${params.blockType}.`, { ok, ...params });
 		},
@@ -369,7 +383,11 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { itemName: string; num?: number }) {
 			const bot = getBot();
-			const ok = await safeCall("craftRecipe", () => skills.craftRecipe(bot, params.itemName, Math.max(1, Math.floor(params.num ?? 1))));
+			const ok = await safeCall(
+				"craftRecipe",
+				() => skills.craftRecipe(bot, params.itemName, Math.max(1, Math.floor(params.num ?? 1))),
+				30_000,
+			);
 			return textResult(ok ? `Crafted ${params.itemName}.` : `craftRecipe returned false.`, { ok, ...params });
 		},
 	});
@@ -383,7 +401,7 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { itemName: string }) {
 			const bot = getBot();
-			const ok = await safeCall("equip", () => skills.equip(bot, params.itemName));
+			const ok = await safeCall("equip", () => skills.equip(bot, params.itemName), 15_000);
 			return textResult(ok ? `Equipped ${params.itemName}.` : `equip returned false for ${params.itemName}.`, { ok, ...params });
 		},
 	});
@@ -397,7 +415,7 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { itemName?: string }) {
 			const bot = getBot();
-			const ok = await safeCall("consume", () => skills.consume(bot, params.itemName ?? ""));
+			const ok = await safeCall("consume", () => skills.consume(bot, params.itemName ?? ""), 30_000);
 			return textResult(ok ? `Ate ${params.itemName ?? "food"}.` : `consume returned false.`, { ok, ...params });
 		},
 	});
@@ -411,7 +429,7 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { range?: number }) {
 			const bot = getBot();
-			const ok = await safeCall("defendSelf", () => skills.defendSelf(bot, params.range ?? 9));
+			const ok = await safeCall("defendSelf", () => skills.defendSelf(bot, params.range ?? 9), 45_000);
 			return textResult(ok ? `Defended against hostiles.` : `defendSelf returned false.`, { ok, ...params });
 		},
 	});
@@ -425,7 +443,7 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { distance?: number }) {
 			const bot = getBot();
-			const ok = await safeCall("avoidEnemies", () => skills.avoidEnemies(bot, params.distance ?? 16));
+			const ok = await safeCall("avoidEnemies", () => skills.avoidEnemies(bot, params.distance ?? 16), 45_000);
 			return textResult(ok ? `Avoided enemies.` : `avoidEnemies returned false.`, { ok, ...params });
 		},
 	});
@@ -440,7 +458,7 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		async execute(_id, params: { seconds?: number }) {
 			const bot = getBot();
 			const secs = Math.max(1, Math.min(600, Math.floor(params.seconds ?? 30)));
-			await safeCall("stay", () => skills.stay(bot, secs));
+			await safeCall("stay", () => skills.stay(bot, secs), secs * 1000 + 10_000);
 			return textResult(`Stood still for ${secs}s.`, { seconds: secs });
 		},
 	});
@@ -454,7 +472,7 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute() {
 			const bot = getBot();
-			const ok = await safeCall("pickupNearbyItems", () => skills.pickupNearbyItems(bot));
+			const ok = await safeCall("pickupNearbyItems", () => skills.pickupNearbyItems(bot), 30_000);
 			return textResult(ok ? `Picked up nearby items.` : `pickupNearbyItems returned false.`);
 		},
 	});
