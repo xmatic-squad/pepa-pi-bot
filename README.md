@@ -158,7 +158,7 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 
 🌳 **Phase 0 — Body** done. Bridge online, AuthMe handled, `hello` sent. See `skills/server-onboarding.md`.
 
-🌳 **Phase 1 — Presence** implemented: the bridge stays online with bounded reconnects, keeps a rolling chat buffer, exposes status/recent-chat/escalation tools, and can prompt the Pi loop to reply sparingly. Phase 5 self-extension is documented and in progress; Phase 6 escalation logging is implemented.
+🌳 **Phase 1 — Presence** implemented and operator trust wired: the bridge stays online with bounded reconnects, keeps a rolling chat buffer, exposes status/recent-chat/operator/escalation tools, applies `OPERATOR_USERNAMES` as scope-only trust, and can prompt the Pi loop to reply sparingly. Phase 5 self-extension is documented and in progress; Phase 6 escalation logging is implemented.
 
 Full plan: [`docs/roadmap.md`](./docs/roadmap.md). Day-to-day judgement principles live under "Operating principles" in [`AGENTS.md`](./AGENTS.md).
 

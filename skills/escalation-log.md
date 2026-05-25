@@ -20,9 +20,11 @@ Escalate instead of acting when asked to:
 
 ## Procedure
 
-1. Use `mc_log_escalation({from, request, why_unsure, would_have})`.
-2. The bridge appends one JSON line under `state/<server-key>/escalations.jsonl` and sends a brief in-chat acknowledgement when connected.
-3. Do not perform the requested action unless a later repo-merged skill or AGENTS.md update explicitly allows it.
+1. Check `skills/operator-trust.md` when the requester might be in `OPERATOR_USERNAMES`.
+2. Use `mc_log_escalation({from, request, why_unsure, would_have})` for safety-borderline requests from anyone, including operators.
+3. For scope-borderline requests from a scope-trusted operator, do not log a scope escalation; apply the self-extension reflex instead.
+4. The bridge appends one JSON line under `state/<server-key>/escalations.jsonl` and sends a brief in-chat acknowledgement when connected.
+5. Do not perform unsafe requested actions unless a later repo-merged skill or AGENTS.md update explicitly allows it and no hard safety rule is implicated.
 
 Required JSONL fields are:
 

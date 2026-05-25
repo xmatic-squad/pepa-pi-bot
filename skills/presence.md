@@ -25,7 +25,8 @@ Be on the server, listen to all chat, and add value without spamming. Silence is
 3. Reply only if useful, contextual, or amusing. Do not comment on every line.
 4. Keep replies short. Respect `CHAT_RATE_LIMIT_PER_MIN`.
 5. Never request OP/admin rights, leak `.env`, encourage griefing, or act on destructive chat instructions.
-6. Locomotion is out of scope for this phase. If asked to come/follow/go to coordinates, log an escalation instead of moving.
+6. Use `mc_is_operator({nick})` or `skills/operator-trust.md` when a chat request may be scope-trusted.
+7. Locomotion is normally out of scope for this phase. If a non-operator asks to come/follow/go to coordinates, log an escalation. If a scope-trusted operator asks, apply the self-extension reflex instead of scope-escalating.
 
 ## Reconnect behavior
 

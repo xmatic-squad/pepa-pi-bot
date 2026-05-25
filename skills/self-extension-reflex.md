@@ -32,4 +32,4 @@ Draft a short plan before acting:
 
 ## Boundaries
 
-Do not use this reflex to bypass hard rules. Destructive, ambiguous, OP/admin, PvP/griefing, item-give/drop, leave/disconnect, and current phase-2 locomotion requests are escalations, not learning tasks.
+Do not use this reflex to bypass hard rules. Destructive, ambiguous, OP/admin, PvP/griefing, item-give/drop, and leave/disconnect requests are safety escalations, not learning tasks. Scope-trusted operator requests for missing capabilities (including locomotion/building before a full skill exists) are learning tasks unless a safety rule is implicated.

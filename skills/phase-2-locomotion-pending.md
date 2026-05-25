@@ -10,11 +10,13 @@ Status: pending.
 
 Locomotion is intentionally out of scope for the current session. Do not add movement/pathfinder tools yet.
 
-For now, if chat asks the bot to move, follow, or go to coordinates:
+For now, if non-operator chat asks the bot to move, follow, or go to coordinates:
 
 1. Use `mc_log_escalation(...)`.
-2. Explain in `why_unsure` that the request belongs to phase 2 and safe pathing/distance bounds are not implemented yet.
+2. Explain in `why_unsure` that safe pathing/distance bounds are not implemented yet.
 3. Do not move.
+
+If a scope-trusted operator asks, do not log a scope escalation. Reply that you will try to learn, then draft or update the guarded locomotion skill plan. Do not actually move until safe pathing tools and rails exist.
 
 Future phase-2 implementation should include:
 
