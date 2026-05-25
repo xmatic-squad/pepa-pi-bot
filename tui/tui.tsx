@@ -123,8 +123,28 @@ function StatusBar({ snapshot, paused, connectedToBot }: { snapshot: Snapshot; p
 				{snapshot.closestHostile ? `  closest=${snapshot.closestHostile.name}@${snapshot.closestHostile.distance}m` : ""}
 				{snapshot.pendingProposals ? <Text color="magenta" bold>{`  [proposals ${snapshot.pendingProposals}, press y]`}</Text> : null}
 			</Text>
+			<Text>
+				{snapshot.busy ? (
+					<Text color="cyan">▸ busy: {snapshot.busy.label}</Text>
+				) : snapshot.lastReflex ? (
+					<Text dimColor>
+						last reflex: {snapshot.lastReflex.name}
+						{snapshot.lastReflex.label ? ` (${snapshot.lastReflex.label})` : ""}{" "}
+						{snapshot.lastReflex.ts ? formatAge(snapshot.lastReflex.ts) : ""}
+					</Text>
+				) : (
+					<Text dimColor>no reflex action yet</Text>
+				)}
+			</Text>
 		</Box>
 	);
+}
+
+function formatAge(tsMs: number): string {
+	const ageMs = Date.now() - tsMs;
+	if (ageMs < 60_000) return `${Math.floor(ageMs / 1000)}s ago`;
+	if (ageMs < 3600_000) return `${Math.floor(ageMs / 60_000)}m ago`;
+	return `${Math.floor(ageMs / 3600_000)}h ago`;
 }
 
 function ProposalPanel({

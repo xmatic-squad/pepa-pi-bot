@@ -29,6 +29,24 @@ function ensurePathfinder(bot) {
 	pluginLoaded.add(bot);
 }
 
+// Each action that uses pathfinder should set its own Movements profile
+// before calling goto — otherwise it inherits whatever the previous caller
+// left set, which has caused live regressions (e.g. flee setting canDig=false,
+// then a later chop inheriting the same restrictive profile).
+function setMovementsForGather(bot) {
+	const m = new Movements(bot);
+	m.canDig = true; // chopping is the entire point
+	m.allow1by1towers = false;
+	bot.pathfinder.setMovements(m);
+}
+
+function setMovementsForTravel(bot) {
+	const m = new Movements(bot);
+	m.canDig = true; // dig through leaves rather than get stuck
+	m.allow1by1towers = false;
+	bot.pathfinder.setMovements(m);
+}
+
 // ---- combat ----------------------------------------------------------------
 
 const MELEE_WEAPONS = [
@@ -96,8 +114,12 @@ export async function fleeFrom(bot, fromEntity, distance = 16) {
 	const ty = Math.round(here.y);
 	info("action", `flee: from=${fromEntity?.name ?? "?"} → ${tx},${ty},${tz}`);
 
+	// canDig:true here is deliberate — without it the bot gets permanently
+	// stuck in dense tree canopy (observed live: bot perched at Y=85 inside
+	// dark-oak leaves, every flee timed out for hours). We accept the risk of
+	// chopping through scenery while panicking; it's how a player would react.
 	const movements = new Movements(bot);
-	movements.canDig = false;
+	movements.canDig = true;
 	movements.allow1by1towers = false;
 	bot.pathfinder.setMovements(movements);
 
@@ -194,6 +216,7 @@ export async function sleepInBed(bot) {
 	if (bedBlock) {
 		info("action", `sleep: nearest bed at ${bedBlock.position.x},${bedBlock.position.y},${bedBlock.position.z}`);
 		ensurePathfinder(bot);
+		setMovementsForTravel(bot);
 		try {
 			await withTimeout(
 				bot.pathfinder.goto(new goals.GoalNear(bedBlock.position.x, bedBlock.position.y, bedBlock.position.z, 2)),
@@ -214,10 +237,133 @@ export async function sleepInBed(bot) {
 	return { ok: false, detail: "no bed in range and won't place blindly" };
 }
 
+// ---- gathering -------------------------------------------------------------
+
+const LOG_NAMES = [
+	"oak_log",
+	"dark_oak_log",
+	"spruce_log",
+	"birch_log",
+	"jungle_log",
+	"acacia_log",
+	"mangrove_log",
+	"cherry_log",
+	"pale_oak_log",
+];
+
+const AXE_NAMES = [
+	"netherite_axe",
+	"diamond_axe",
+	"iron_axe",
+	"stone_axe",
+	"golden_axe",
+	"wooden_axe",
+];
+
+async function equipBestAxe(bot) {
+	for (const name of AXE_NAMES) {
+		const item = bot.inventory.items().find((i) => i.name === name);
+		if (item) {
+			try {
+				await bot.equip(item, "hand");
+				return name;
+			} catch {}
+		}
+	}
+	return null;
+}
+
+// Per-bot blacklist of (x,y,z) positions that pathfinder failed to reach
+// recently. Cleared after BLACKLIST_TTL_MS so the bot can retry if the world
+// has changed (a player chopped a path, the tree fell to natural decay, etc).
+const chopBlacklist = new WeakMap(); // bot → Map<"x,y,z", expireMs>
+const BLACKLIST_TTL_MS = 5 * 60_000;
+
+function getBlacklist(bot) {
+	let m = chopBlacklist.get(bot);
+	if (!m) {
+		m = new Map();
+		chopBlacklist.set(bot, m);
+	}
+	// Sweep expired entries on each lookup — small, cheap.
+	const now = Date.now();
+	for (const [k, exp] of m) if (exp < now) m.delete(k);
+	return m;
+}
+
+export async function chopNearestTree(bot) {
+	const blacklist = getBlacklist(bot);
+	// findBlock invokes the matcher for blocks that pass the maxDistance
+	// pre-filter; in dense areas some have a synthetic shape with no
+	// `.position`. Guard or we crash before we even start pathfinding.
+	const log = bot.findBlock({
+		matching: (b) => {
+			if (!b || !b.position || !LOG_NAMES.includes(b.name)) return false;
+			const key = `${b.position.x},${b.position.y},${b.position.z}`;
+			return !blacklist.has(key);
+		},
+		maxDistance: 32,
+	});
+	if (!log) return { ok: false, detail: "no reachable log within 32 blocks" };
+
+	ensurePathfinder(bot);
+	setMovementsForGather(bot);
+	const axe = await equipBestAxe(bot);
+	info(
+		"action",
+		`chop: ${log.name} at ${log.position.x},${log.position.y},${log.position.z} (tool=${axe ?? "fists"})`,
+	);
+	try {
+		await withTimeout(
+			bot.pathfinder.goto(new goals.GoalGetToBlock(log.position.x, log.position.y, log.position.z)),
+			45_000,
+			"pathToLog",
+		);
+		await withTimeout(bot.dig(log), 30_000, "digLog");
+		// Walk over the dropped item briefly (collectblock plugin would do this
+		// for us, but a simple sleep-then-resume is enough for now).
+		await new Promise((r) => setTimeout(r, 1200));
+		return { ok: true, detail: { logType: log.name, at: log.position } };
+	} catch (e) {
+		warn("action", `chop failed: ${e.message}`);
+		const key = `${log.position.x},${log.position.y},${log.position.z}`;
+		blacklist.set(key, Date.now() + BLACKLIST_TTL_MS);
+		return { ok: false, detail: e.message, blacklisted: log.position };
+	}
+}
+
+// ---- exploration -----------------------------------------------------------
+
+export async function wander(bot, radius = 12) {
+	ensurePathfinder(bot);
+	setMovementsForTravel(bot);
+	// Pick a random offset that's at least 6 blocks away — small enough to be
+	// safe, large enough to not be a no-op when we're stuck on the same block.
+	const here = bot.entity.position;
+	const angle = Math.random() * Math.PI * 2;
+	const dist = 6 + Math.random() * (radius - 6);
+	const tx = Math.round(here.x + Math.cos(angle) * dist);
+	const tz = Math.round(here.z + Math.sin(angle) * dist);
+	const ty = Math.round(here.y);
+	info("action", `wander: → ${tx},${ty},${tz} (dist=${dist.toFixed(1)})`);
+	try {
+		await withTimeout(
+			bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 2)),
+			30_000,
+			`wander(${tx},${tz})`,
+		);
+		return { ok: true, detail: { to: { x: tx, y: ty, z: tz } } };
+	} catch (e) {
+		warn("action", `wander failed: ${e.message}`);
+		return { ok: false, detail: e.message };
+	}
+}
+
 // ---- navigation (for operator come/follow) --------------------------------
 
 export async function goTo(bot, x, y, z, minDistance = 2) {
 	ensurePathfinder(bot);
+	setMovementsForTravel(bot);
 	info("action", `goTo: ${x},${y},${z} (min ${minDistance})`);
 	try {
 		await withTimeout(
