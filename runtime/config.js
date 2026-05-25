@@ -22,11 +22,20 @@ const host = req("MC_HOST");
 const port = Number.parseInt(opt("MC_PORT", "25565"), 10);
 const username = req("MC_USERNAME");
 
+// MC_VERSION: "auto" (or empty) lets mineflayer auto-detect from the server
+// handshake — the right default per the survival-bot PRD (no hard-coded modern
+// version unless the server requires pinning). Mineflayer accepts `false` to
+// auto-detect, so we translate "auto" into false at the boundary; the original
+// string is preserved for logging.
+const rawVersion = opt("MC_VERSION", "auto");
+const mineflayerVersion = rawVersion.toLowerCase() === "auto" ? false : rawVersion;
+
 export const config = Object.freeze({
 	host,
 	port,
 	username,
-	version: opt("MC_VERSION", "1.21.5"),
+	version: rawVersion,
+	mineflayerVersion,
 	authMode: opt("MC_AUTH_MODE", "offline"),
 	authmePassword: opt("MC_AUTHME_PASSWORD", ""),
 	operators: opt("OPERATOR_USERNAMES", "")

@@ -3,7 +3,10 @@
 //   - the reflex tick loop (no LLM in hot path)
 //   - the IPC server for TUI clients
 //   - on-demand Pi-headless escalation (manual or automatic)
-//   - simple operator-chat commands from OPERATOR_USERNAMES
+//
+// MC chat is dialog-only (see plans/autonomous-survival-bot-prd.md, FR1).
+// Player/operator chat may produce a social reply but never dispatches a
+// movement/build/mining task. TUI is the only local control plane.
 //
 // Lifecycle: started by `npm run bot`. Connects to MC, spawns IPC server,
 // ticks every TICK_INTERVAL_SECONDS, broadcasts STATUS to clients each tick.
@@ -58,16 +61,12 @@ const reflexCtx = {
 	snapshot: lastSnapshot,
 	busy: false,
 	currentActionLabel: null,
-	operatorGoal: null,
 	idleCounter: 0,
 	lastEatAt: 0,
 	lastSleepAttemptAt: 0,
 	// Tracks repeated failure of the same labelled action — triggers a proposal.
 	recentFailures: [], // [{label, detail, ts}], capped at 10
 	dispatch: dispatchAction,
-	clearOperatorGoal: () => {
-		reflexCtx.operatorGoal = null;
-	},
 };
 
 let chatTimestamps = [];
@@ -300,96 +299,77 @@ function maybeFileProposal(label) {
 	appendDiary(`proposal filed: ${filename} (${summary})`);
 }
 
-// ---- player chat replies (non-operator) ------------------------------------
+// ---- chat replies (dialog-only) --------------------------------------------
+//
+// As of Phase 0 of the survival-bot PRD, MC chat is dialog-only for everyone,
+// including OPERATOR_USERNAMES. The bot may reply socially or answer status
+// questions, but it does NOT dispatch movement/build/mining tasks from chat.
+// If a player addresses the bot with a command-like verb (come, follow, build,
+// pause, stop, give), the bot acknowledges that chat is dialog-only and
+// records the ignored command in the diary.
 
-// Rate-limited light replies to ordinary players. Spam guard is intentional:
-// the chat rate limit catches outbound flooding; this one prevents replying
-// to every greeting in a busy room.
-let lastPlayerReplyAt = 0;
-const PLAYER_REPLY_COOLDOWN_MS = 30_000;
+let lastChatReplyAt = 0;
+const CHAT_REPLY_COOLDOWN_MS = 30_000;
 
 const GREETING_RE = /\b(hi|hello|hey|yo|sup|hola|привет|здаров|здарова|здорова|здравствуй|здравствуйте|салам)\b/i;
-
-function maybeReplyToPlayer(username, text) {
-	if (!bot) return;
-	const lower = text.trim().toLowerCase();
-	const botname = bot.username.toLowerCase();
-	const addressed = lower.includes(botname);
-	if (!addressed && !GREETING_RE.test(lower)) return;
-	const since = Date.now() - lastPlayerReplyAt;
-	if (since < PLAYER_REPLY_COOLDOWN_MS) return;
-	lastPlayerReplyAt = Date.now();
-
-	// Pick a small canned response. Non-operator chat is dialog-only by design
-	// — we don't act on player verbs, we just acknowledge presence.
-	const replies = ["yo", "hey", "hi", "привет"];
-	const reply = replies[Math.floor(Math.random() * replies.length)];
-	botChat(`${username}: ${reply}`);
-}
-
-// ---- operator chat commands ------------------------------------------------
+const STATUS_RE = /\b(status|how are you|what are you doing|whats up|what['’]?s up|чё делаешь|что делаешь|как ты|как дела|статус)\b/i;
+const COMMAND_LIKE_RE = /\b(come|follow|build|pause|resume|stop|go to|goto|tp|teleport|give|drop|attack|kill|dig|mine|chop|farm|harvest|sleep here|иди сюда|подойди|следуй|остановись|стоп|пауза|строй|копай|дай)\b/i;
 
 function isOperator(username) {
 	if (!username) return false;
 	return config.operators.includes(username.toLowerCase());
 }
 
-function handleOperatorChat(username, text) {
-	// Two address formats accepted: prefix "<botname>," or "<botname>:" (case-insensitive),
-	// or full chat starting with the bot's own name. We're permissive here.
-	const lower = text.trim().toLowerCase();
+function buildStatusReply() {
+	const s = lastSnapshot;
+	const parts = [];
+	if (reflexCtx.busy) parts.push(`busy=${reflexCtx.currentActionLabel}`);
+	if (s.health !== undefined) parts.push(`hp=${s.health}/20`);
+	if (s.food !== undefined) parts.push(`food=${s.food}/20`);
+	if (s.position) parts.push(`pos=${s.position.x},${s.position.y},${s.position.z}`);
+	if (s.hostileCount) parts.push(`hostiles=${s.hostileCount}`);
+	return parts.join(" ") || "alive";
+}
+
+function handleChat(username, text) {
+	if (!bot) return;
+	const trimmed = text.trim();
+	const lower = trimmed.toLowerCase();
 	const botname = bot.username.toLowerCase();
-	const prefixed = lower.startsWith(botname + " ") || lower.startsWith(botname + ",") || lower.startsWith(botname + ":");
-	const stripped = prefixed ? text.trim().slice(botname.length).replace(/^[,:\s]+/, "") : text.trim();
-	const cmd = stripped.toLowerCase();
+	const addressed = lower.includes(botname);
+	const looksLikeCommand = addressed && COMMAND_LIKE_RE.test(lower);
 
-	// Unaddressed chat is fine — just don't treat it as a command.
-	if (!prefixed) return;
-
-	info("operator", `${username} → "${cmd}"`);
-
-	if (cmd === "status" || cmd === "how are you?") {
-		const s = lastSnapshot;
-		botChat(
-			`hp=${s.health}/20 food=${s.food}/20 pos=${s.position?.x},${s.position?.y},${s.position?.z}${
-				s.hostileCount ? ` hostiles=${s.hostileCount}` : ""
-			}${reflexCtx.busy ? ` busy=${reflexCtx.currentActionLabel}` : ""}`,
-		);
-		return;
-	}
-	if (cmd === "pause") {
-		reflexPaused = true;
-		botChat(`reflex paused, awaiting your call.`);
-		return;
-	}
-	if (cmd === "resume") {
-		reflexPaused = false;
-		botChat(`reflex resumed.`);
-		return;
-	}
-	if (cmd === "stop") {
-		botChat(`bye.`);
-		setTimeout(() => gracefulExit(0), 500);
-		return;
-	}
-	if (cmd === "come" || cmd === "come here") {
-		const op = Object.values(bot.entities).find((e) => e.username === username);
-		if (!op) {
-			botChat(`${username}: can't see you nearby.`);
-			return;
+	// Command-like chat (from anyone, including operators) is recorded but not
+	// dispatched. We tell the speaker once per cooldown so they aren't left
+	// wondering why nothing happened.
+	if (looksLikeCommand) {
+		const op = isOperator(username) ? "operator" : "player";
+		info("chat", `ignored command-like chat from ${op} ${username}: ${trimmed.slice(0, 80)}`);
+		appendDiary(`ignored command-like chat from ${username}: ${trimmed.slice(0, 120)}`);
+		const since = Date.now() - lastChatReplyAt;
+		if (since >= CHAT_REPLY_COOLDOWN_MS) {
+			lastChatReplyAt = Date.now();
+			botChat(`${username}: MC chat is dialog-only — operator uses the TUI to drive me.`);
 		}
-		reflexCtx.operatorGoal = {
-			kind: "come",
-			from: username,
-			x: Math.round(op.position.x),
-			y: Math.round(op.position.y),
-			z: Math.round(op.position.z),
-		};
-		botChat(`on my way to ${reflexCtx.operatorGoal.x},${reflexCtx.operatorGoal.y},${reflexCtx.operatorGoal.z}`);
 		return;
 	}
 
-	botChat(`${username}: didn't recognize "${cmd}". I know: status, come, pause, resume, stop.`);
+	// Dialog: greeting, status question, or addressed banter.
+	const wantsStatus = addressed && STATUS_RE.test(lower);
+	const isGreeting = GREETING_RE.test(lower);
+	if (!addressed && !isGreeting) return;
+
+	const since = Date.now() - lastChatReplyAt;
+	if (since < CHAT_REPLY_COOLDOWN_MS) return;
+	lastChatReplyAt = Date.now();
+
+	if (wantsStatus) {
+		botChat(`${username}: ${buildStatusReply()}`);
+		return;
+	}
+	const greetings = ["yo", "hey", "hi", "привет"];
+	const reply = greetings[Math.floor(Math.random() * greetings.length)];
+	botChat(`${username}: ${reply}`);
 }
 
 // ---- connect ---------------------------------------------------------------
@@ -402,7 +382,7 @@ function connect() {
 		port: config.port,
 		username: config.username,
 		auth: config.authMode === "microsoft" ? "microsoft" : "offline",
-		version: config.version,
+		version: config.mineflayerVersion,
 		hideErrors: false,
 	});
 	reflexCtx.bot = bot;
@@ -421,18 +401,10 @@ function connect() {
 	bot.on("chat", (username, message) => {
 		if (username === bot.username) return;
 		ipc?.broadcast(EVENT_TYPES.CHAT, { from: username, text: message, kind: "player" });
-		if (isOperator(username)) {
-			try {
-				handleOperatorChat(username, message);
-			} catch (e) {
-				warn("operator", `handler threw: ${e.message}`);
-			}
-		} else {
-			try {
-				maybeReplyToPlayer(username, message);
-			} catch (e) {
-				warn("chat", `player reply handler threw: ${e.message}`);
-			}
+		try {
+			handleChat(username, message);
+		} catch (e) {
+			warn("chat", `chat handler threw: ${e.message}`);
 		}
 	});
 
@@ -441,8 +413,6 @@ function connect() {
 		warn("mc", `died at ${JSON.stringify(pos)}`);
 		appendDiary(`died at ${pos?.x.toFixed(0)},${pos?.y.toFixed(0)},${pos?.z.toFixed(0)}`);
 		ipc?.broadcast(EVENT_TYPES.DEATH, { reason: "unknown", position: pos });
-		// On death, drop any operator goal — they need to ask again.
-		reflexCtx.operatorGoal = null;
 		clearCurrentTask();
 	});
 
@@ -488,7 +458,7 @@ function maybeAutoEscalate() {
 		`You are the escalation cortex for an autonomous Minecraft bot. The bot's`,
 		`script-driven reflex loop has produced no useful action for ${ESCALATE_AFTER_NOOPS} consecutive ticks`,
 		`(~${Math.round((ESCALATE_AFTER_NOOPS * config.tickIntervalMs) / 1000)}s). The reflex chain is:`,
-		`  operator-goal > defend > eat > sleep > idle`,
+		`  defend > eat > sleep > tech-tree > autonomous > idle`,
 		`Snapshot:`,
 		"```json",
 		promptCtx,
