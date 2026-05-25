@@ -134,23 +134,47 @@ function slugify(s) {
 		.slice(0, 60);
 }
 
-export function writeProposal({ kind, summary, body }) {
+// editScope (optional): array of repo-relative path prefixes the
+// auto-patcher is allowed to modify. Read back from the frontmatter
+// so scripts/auto-patch.js can refuse cherry-picks that touch other
+// areas. Falls back to the historical default (`runtime/`) when
+// absent for backwards compatibility with older proposals.
+export function writeProposal({ kind, summary, body, editScope }) {
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 	const filename = `${stamp}-${slugify(kind)}.md`;
 	const filePath = path.join(PROPOSALS_DIR, filename);
-	const content = [
+	const frontmatter = [
 		"---",
 		`kind: ${kind}`,
 		`ts: ${new Date().toISOString()}`,
 		`summary: ${JSON.stringify(summary)}`,
 		"approved: false",
-		"---",
-		"",
-		body,
-		"",
-	].join("\n");
+	];
+	if (Array.isArray(editScope) && editScope.length) {
+		frontmatter.push(`editScope: ${JSON.stringify(editScope)}`);
+	}
+	frontmatter.push("---", "");
+	const content = frontmatter.concat([body, ""]).join("\n");
 	fs.writeFileSync(filePath, content);
 	return { filePath, filename };
+}
+
+// Best-effort parse of editScope from a proposal markdown body's
+// frontmatter. Returns null when not specified.
+export function readProposalEditScope(filename, { approved = false } = {}) {
+	const dir = approved ? PROPOSALS_APPROVED_DIR : PROPOSALS_DIR;
+	const filePath = path.join(dir, filename);
+	let raw;
+	try { raw = fs.readFileSync(filePath, "utf8"); } catch { return null; }
+	const m = raw.match(/^---\n([\s\S]*?)\n---/);
+	if (!m) return null;
+	const scopeLine = m[1].split("\n").find((l) => l.startsWith("editScope:"));
+	if (!scopeLine) return null;
+	try {
+		return JSON.parse(scopeLine.slice("editScope:".length).trim());
+	} catch {
+		return null;
+	}
 }
 
 export function listProposals({ approved = false } = {}) {

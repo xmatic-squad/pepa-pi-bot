@@ -246,6 +246,29 @@ in-process. The package is **not** a default dep — install it explicitly
 (`npm i prismarine-viewer`) before enabling. If missing, the runtime
 logs a warning and continues.
 
+### Self-improvement v2 (Phase 6)
+
+Two classes of proposals now land in `state/<host>/proposals/`:
+
+1. **Bug-class failures** — same-label action returns `{ok: false}` 5×
+   in a row, dominated by `bug` (TypeError, "Cannot read properties")
+   or persistent timeout. Handled by the older tracker in `bot.js`.
+2. **Stuck incidents** — `noProgressReason` stays the same for ≥5 min
+   without a productive dispatch. Handled by
+   `runtime/stuck-incident.js`. The proposal body includes the
+   runtimeState, milestone, suggested skill, slim snapshot, last
+   result, and per-skill success/failure metrics.
+
+Both kinds now persist an **`editScope`** in their frontmatter — an
+array of repo-relative path prefixes the auto-patcher is allowed to
+modify. `state-store.readProposalEditScope(filename)` reads it back;
+hooking `scripts/auto-patch.js` to refuse cherry-picks that touch
+other areas is the remaining follow-up.
+
+Per-skill metrics live in memory only (best-effort) but are surfaced
+on `snapshot.skillMetrics = { [skillId]: { ok, fail, lastTs } }` so
+the TUI can show which skills are reliable and which keep failing.
+
 ### Social layer (Phase 5)
 
 Inbound MC chat is classified via `runtime/social/intent.js` into one
