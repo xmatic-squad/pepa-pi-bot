@@ -96,7 +96,22 @@ The TUI auto-reconnects to the bot if you restart it. Press `q` to leave the TUI
 | `r` | Force a fresh status snapshot. |
 | `c` | Send a chat message into MC. |
 | `a` | Ask Pi (one-shot subprocess). |
+| `y` | Open the latest pending proposal (badge appears in status bar). In the panel: `y` approve, `n`/Esc close. |
 | `q` | Quit the TUI — bot keeps running. |
+
+### Self-improvement loop (short version)
+
+The bot **proposes its own patches** when something repeatedly fails:
+
+1. Reflex action fails 3× with the same label → markdown proposal lands under `state/<host>/proposals/`.
+2. Status bar shows `[proposals N, press y]`.
+3. Press `y` to read, `y` to approve. The proposal moves to `proposals/approved/`.
+4. Run `npm run propose:apply <filename>` — spawns Pi headless on a fresh feature branch with the proposal + repo conventions. Pi writes a patch and commits.
+5. Review the diff, smoke-test locally (`npm run bot`), push + open a PR by hand.
+
+Supervisor (`npm run bot`) watches `runtime/*.js` and hot-restarts the child on file change, so during step 4 you can iterate quickly.
+
+See [`docs/runtime.md`](./docs/runtime.md) for the full lifecycle and the operator-chat command list (`pepa_bot status`, `come`, `pause`, etc.).
 
 ## Authentication
 
