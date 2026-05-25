@@ -25,6 +25,20 @@ import { info, warn } from "../log.js";
 import { skill as chopLogs } from "./chop-logs.js";
 import { skill as eat } from "./eat.js";
 import { skill as wander } from "./wander.js";
+import { skill as gatherStone } from "./gather-stone.js";
+import {
+	craftPlanksSkill,
+	craftSticksSkill,
+	craftWoodenAxeSkill,
+	craftWoodenPickaxeSkill,
+	craftWoodenSwordSkill,
+	craftStoneAxeSkill,
+	craftStonePickaxeSkill,
+	craftStoneSwordSkill,
+	craftFurnaceSkill,
+	craftChestSkill,
+	craftTorchSkill,
+} from "./craft.js";
 
 const SKILLS = new Map();
 
@@ -40,6 +54,18 @@ function register(skill) {
 register(chopLogs);
 register(eat);
 register(wander);
+register(gatherStone);
+register(craftPlanksSkill);
+register(craftSticksSkill);
+register(craftWoodenAxeSkill);
+register(craftWoodenPickaxeSkill);
+register(craftWoodenSwordSkill);
+register(craftStoneAxeSkill);
+register(craftStonePickaxeSkill);
+register(craftStoneSwordSkill);
+register(craftFurnaceSkill);
+register(craftChestSkill);
+register(craftTorchSkill);
 
 export function listSkills() {
 	return Array.from(SKILLS.values()).map((s) => ({

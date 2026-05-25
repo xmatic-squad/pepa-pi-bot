@@ -160,6 +160,12 @@ function StatusBar({ snapshot, paused, connectedToBot }: { snapshot: Snapshot; p
 			<Text>
 				<Text dimColor>milestone: </Text>
 				<Text>{milestone ?? <Text dimColor>(none — planner_empty?)</Text>}</Text>
+				{snapshot.curriculum?.plan?.skillId ? (
+					<Text dimColor> → suggested: {snapshot.curriculum.plan.skillId}</Text>
+				) : null}
+				{snapshot.curriculum?.inventoryFull ? (
+					<Text color="yellow"> [inventory full]</Text>
+				) : null}
 			</Text>
 			{reason ? (
 				<Text>
