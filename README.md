@@ -1,38 +1,46 @@
 # pepa-pi-bot
 
-> A universal, autonomous, self-extending Minecraft player. Powered by [Pi](https://pi.dev) and the [Mineflayer](https://github.com/PrismarineJS/mineflayer) protocol stack. Works against **any** Minecraft Java server — vanilla, Paper, Spigot, Fabric, Forge, online-mode or cracked, modded or vanilla.
+> A universal, autonomous, self-extending Minecraft player. Built on [Mineflayer](https://github.com/PrismarineJS/mineflayer) with a hybrid runtime: a fast script-driven reflex loop for the everyday, and headless [Pi](https://pi.dev) escalation for the hard bits. Works against **any** Minecraft Java server — vanilla, Paper, Spigot, Fabric, Forge, online-mode or cracked, modded or vanilla.
 
-The bot is **not a finished application**. It is a seed: a Pi agent with an initial mandate and a hand-off to whatever Minecraft server you point it at. From there, the agent is expected to grow its own toolset — writing new skills, fetching extensions, and adapting its behaviour as it plays.
+The bot is **not a finished application**. It is a seed: a Mineflayer body, a tiny reflex brain, and a hand-off to whatever Minecraft server you point it at. The bot is expected to grow its own toolset over time — writing new reflexes, installing skills, adapting its behaviour as it plays.
 
-The name `pepa-pi-bot` is just the project's name (`pepa` from the original test server, `pi` from the runtime). The bot itself is server-agnostic.
+The name `pepa-pi-bot` is just the project's name (`pepa` from the original test server, `pi` from the original runtime). The bot itself is server-agnostic.
+
+## Runtime modes
+
+Two ways to run the bot. The hybrid runtime is the default — Pi-only is a fallback for experiments.
+
+| Mode | Entry | When to use |
+|---|---|---|
+| **Hybrid runtime** (recommended) | `npm run bot` + `npm run tui` | Day-to-day. Script-driven reflex tick + Ink TUI dashboard + Pi/Codex called only on demand. Fast, cheap, observable. |
+| **Pi-only** (fallback) | `npm run agent` | When you want every decision to go through an LLM (rare, but useful for experiments and code-writing sessions). |
+
+See [`docs/runtime.md`](./docs/runtime.md) for the full hybrid runtime guide, IPC protocol, TUI hotkeys, and the self-improvement loop.
 
 ## Concept
 
-Most Minecraft AI bots ship as monolithic projects: hard-coded actions, fixed prompts, a single LLM provider, sometimes a single target server. This repo flips that around.
+Most Minecraft AI bots ship as monolithic projects: hard-coded actions, fixed prompts, a single LLM provider, sometimes a single target server. This repo flips that around with a layered runtime.
 
 ```
-┌───────────────────────────────────────────────┐
-│  Pi (terminal agent, model-agnostic)          │
-│  ├── AGENTS.md   ← generic mandate            │
-│  ├── skills/     ← grown over time            │
-│  └── extensions/ ← TS plugins, also grown     │
-└───────────────┬───────────────────────────────┘
-                │ spawns / controls
-                ▼
-┌───────────────────────────────────────────────┐
-│  Mineflayer client                            │
-│  - joins MC server as a real player           │
-│  - chat, movement, inventory, world events    │
-└───────────────┬───────────────────────────────┘
-                │ TCP 25565
-                ▼
-┌───────────────────────────────────────────────┐
-│  ANY Minecraft Java server                    │
-│  configured via .env (host, port, auth, ...)  │
-└───────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  TUI (Ink) — operator dashboard, attaches via Unix sock  │
+│  status / live log / MC chat / hotkeys / ask-Pi          │
+└──────────────────────┬───────────────────────────────────┘
+                       │ newline-JSON
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│  runtime/bot.js — long-running Node daemon               │
+│  ├── Mineflayer client (MC TCP, AuthMe, chat, events)    │
+│  ├── Reflex loop (defend > eat > sleep > idle)           │
+│  │   pure script — no LLM in the hot path                │
+│  └── pi-bridge — spawn `pi -p` only on demand            │
+└──────────────────────┬───────────────────────────────────┘
+                       │ TCP 25565 (any host/port)
+                       ▼
+        ANY Minecraft Java server (configured in .env)
 ```
 
-The Pi agent is the brain. Mineflayer is the body. The bridge between them — the skills, the prompt templates, the supervision loop — is meant to be written **by the agent itself**, starting from a minimal scaffold in this repo.
+The reflex loop is the brain stem. Pi is the cortex — called only when the reflex loop is genuinely stuck, or when the operator asks for help via the TUI. Mineflayer is the body. The skills, reflexes, and supervision loop are meant to grow over time — both by hand and by the bot itself proposing patches.
 
 ## Prerequisites
 
@@ -49,41 +57,46 @@ The Pi agent is the brain. Mineflayer is the body. The bridge between them — t
 ## Quickstart
 
 ```bash
-# 1. Clone
+# 1. Clone + configure
 git clone git@github.com:xmatic-squad/pepa-pi-bot.git
 cd pepa-pi-bot
-
-# 2. Configure for your target server
 cp .env.example .env
-$EDITOR .env          # set MC_HOST, MC_USERNAME, auth mode, LLM provider, etc.
+$EDITOR .env          # set MC_HOST, MC_USERNAME, auth mode, AuthMe password, etc.
 
-# 3. Install Node deps (mineflayer + dotenv to start)
+# 2. Install Node deps
 npm install
 
-# 4. Authenticate Pi with your LLM provider
-pi /login             # OAuth flow — works with ChatGPT Pro / Claude Max
-# OR
-export OPENAI_API_KEY=sk-...
-# OR
-export ANTHROPIC_API_KEY=sk-ant-...
+# 3. (Optional) Authenticate Pi for the escalation hotkey
+pi /login             # OAuth flow — ChatGPT Pro / Claude Max
+# or export OPENAI_API_KEY / ANTHROPIC_API_KEY
 
-# 5. Launch the agent in this directory
-pi
+# 4. Run the bot — two terminals
+#    Terminal 1: the daemon (logs in stdout, persists state under state/<host>/)
+npm run bot
+
+#    Terminal 2: the dashboard (Ink TUI). Hotkeys: p/s/r/c/a/q.
+npm run tui
 ```
 
-On first launch Pi loads `AGENTS.md` from the project root. That file is the seed prompt — it tells the agent it is a Minecraft player, where to find its configuration, and that it is expected to extend itself.
+The TUI auto-reconnects to the bot if you restart it. Press `q` to leave the TUI; the bot keeps running.
 
-### Send the first message
+> Want the LLM-driven, single-process flavour? `npm run agent` launches the original Pi runtime instead. See [`docs/runtime.md`](./docs/runtime.md) for the trade-offs.
 
-Pi only acts when you write to it. Paste the [bootstrap prompt](./prompts/bootstrap.md) as the very first message:
+### Sending chat or asking Pi from the TUI
 
-```
-You're awake. Read AGENTS.md and the repo's current state, then begin executing "First objective — bootstrap your own body" from AGENTS.md. Walk me through each step before you run it the first time — I want to see which Pi tooling (extensions API, skill API, plain bash, etc.) you choose for the mineflayer bridge.
-```
+- Press **`c`** in the TUI to enter chat mode — type, Enter sends into MC chat (rate-limited per `.env`).
+- Press **`a`** to enter ask-Pi mode — type a prompt, Enter spawns `pi -p "<prompt>"`. Output streams into the Pi panel without leaving the TUI.
 
-The agent will then write `extensions/mineflayer-bridge.{ts,js}`, register it with Pi, handle whatever in-game login the server demands, send `hello`, and write its first skill at `skills/server-onboarding.md`.
+### TUI hotkeys cheatsheet
 
-Sessions persist by default. Use `pi -c` to resume the last conversation; subsequent sessions don't need the bootstrap prompt — a simple `Resume. Check the server's online, log in if needed, and report status.` is enough.
+| Key | Effect |
+|---|---|
+| `p` | Pause / resume the reflex loop (MC connection stays). |
+| `s` | Stop the bot (graceful disconnect + cleanup). |
+| `r` | Force a fresh status snapshot. |
+| `c` | Send a chat message into MC. |
+| `a` | Ask Pi (one-shot subprocess). |
+| `q` | Quit the TUI — bot keeps running. |
 
 ## Authentication
 
@@ -128,17 +141,29 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the skill format and how to propo
 
 ```
 pepa-pi-bot/
-├── README.md           ← you are here
-├── AGENTS.md           ← seed prompt, loaded by Pi on launch
-├── .env.example        ← all required env vars, no secrets
-├── .gitignore
-├── LICENSE             ← MIT
-├── package.json        ← node deps (mineflayer + dotenv to start)
-├── skills/             ← grown by the agent (markdown skills)
-├── extensions/         ← grown by the agent (typescript extensions)
-├── prompts/            ← reusable prompt templates
+├── README.md             ← you are here
+├── AGENTS.md             ← seed prompt, loaded by the Pi-only runtime
+├── .env.example          ← all required env vars, no secrets
+├── package.json          ← node deps + scripts (`bot`, `tui`, `agent`)
+├── runtime/              ← hybrid runtime (script reflex + IPC server)
+│   ├── bot.js                  long-running Mineflayer daemon
+│   ├── reflex.js               priority-ordered behaviours, no LLM
+│   ├── perceive.js             snapshot builder
+│   ├── ipc-server.js           Unix-socket server
+│   ├── ipc-protocol.js         shared IPC contract
+│   └── pi-bridge.js            spawn `pi -p` on demand
+├── tui/                  ← Ink TUI dashboard
+│   ├── tui.tsx
+│   └── ipc-client.js
+├── skills/               ← markdown skills (grown by bot or operator)
+├── extensions/           ← Pi extensions (mindcraft-skills, mineflayer-bridge)
+├── prompts/              ← reusable prompt templates
 └── docs/
-    └── architecture.md ← longer-form design notes
+    ├── runtime.md            hybrid runtime guide (start here)
+    ├── architecture.md       longer-form design notes
+    ├── memory-model.md       per-server state layout
+    ├── roadmap.md            phased plan
+    └── …
 ```
 
 ## Safety boundaries
