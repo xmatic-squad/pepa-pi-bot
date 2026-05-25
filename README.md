@@ -73,7 +73,17 @@ pi
 
 On first launch Pi loads `AGENTS.md` from the project root. That file is the seed prompt — it tells the agent it is a Minecraft player, where to find its configuration, and that it is expected to extend itself.
 
-Sessions persist by default. Use `pi -c` to resume the last conversation.
+### Send the first message
+
+Pi only acts when you write to it. Paste the [bootstrap prompt](./prompts/bootstrap.md) as the very first message:
+
+```
+You're awake. Read AGENTS.md and the repo's current state, then begin executing "First objective — bootstrap your own body" from AGENTS.md. Walk me through each step before you run it the first time — I want to see which Pi tooling (extensions API, skill API, plain bash, etc.) you choose for the mineflayer bridge.
+```
+
+The agent will then write `extensions/mineflayer-bridge.{ts,js}`, register it with Pi, handle whatever in-game login the server demands, send `hello`, and write its first skill at `skills/server-onboarding.md`.
+
+Sessions persist by default. Use `pi -c` to resume the last conversation; subsequent sessions don't need the bootstrap prompt — a simple `Resume. Check the server's online, log in if needed, and report status.` is enough.
 
 ## Authentication
 
