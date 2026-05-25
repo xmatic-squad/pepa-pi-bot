@@ -167,6 +167,49 @@ parsing the log stream:
 | `lastEscalation` | `{ ts, ageMs }` of the most recent Pi auto-escalation. |
 | `reflexPaused` | mirror of the local pause flag (so TUI shows the right state immediately). |
 
+### Skill substrate (Phase 2)
+
+Lives under `runtime/skills/`. A **skill** is a small composable unit of
+survival behaviour with a uniform contract:
+
+```js
+export const skill = {
+  id: "namespace.action",
+  title: "Human label",
+  timeoutMs: 45_000,
+  preconditions(ctx)       -> { ok, code?, detail? }
+  async execute(ctx, args) -> { ok, code, detail, worldDelta }
+  validate?(ctx, result)   -> boolean       // optional
+  recover?(ctx, result)    -> any | null    // optional
+}
+```
+
+Registered skills are dispatched via `runSkill(id, ctx, args)` from
+`runtime/skills/index.js`. The runner enforces the timeout, normalises
+the result shape, runs `validate()` and calls `recover()` on failure
+so the scheduler can act on the hint (e.g. "switch to wander"). Stable
+failure codes the runner itself emits live in `RUNNER_CODES`
+(`unknown_skill`, `precondition_failed`, `timeout`, `threw`,
+`validation_failed`, `done`).
+
+Item/block groups are dynamic: `runtime/skills/groups.js` exposes
+`logs(bot)`, `planks(bot)`, `sticks(bot)`, `beds(bot)`, `foods(bot)`,
+`axes(bot)`, `pickaxes(bot)`, `swords(bot)` — every group is derived
+from `bot.registry`, so a version-sensitive item that doesn't exist on
+the connected server simply doesn't appear in the set and skills
+return `code: "unsupported_version"` instead of crashing.
+
+Reference skills shipped today: `gather.logs`, `survive.eat`,
+`explore.wander`. The reflex loop still calls the older
+`runtime/actions.js` primitives directly — porting more behaviours to
+skills lands in later phases.
+
+Run the contract + groups tests:
+
+```bash
+npm test
+```
+
 ### Optional: prismarine-viewer
 
 Set `VIEWER_PORT=<port>` in `.env` to launch

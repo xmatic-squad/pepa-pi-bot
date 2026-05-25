@@ -1,0 +1,157 @@
+// Contract tests for runtime/skills/index.js. Run with: node --test runtime/skills
+//
+// We avoid spinning up a real mineflayer bot — synthetic skills are
+// registered via _registerForTest and exercise every branch of runSkill:
+// preconditions, timeout, exception, validate, recover.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import { runSkill, RUNNER_CODES, _registerForTest } from "./index.js";
+
+const ctx = {}; // skills under test ignore ctx fully
+
+test("unknown skill returns unknown_skill code", async () => {
+	const res = await runSkill("does.not.exist", ctx);
+	assert.equal(res.ok, false);
+	assert.equal(res.code, RUNNER_CODES.UNKNOWN_SKILL);
+});
+
+test("preconditions gate execution", async () => {
+	const teardown = _registerForTest({
+		id: "test.precondition-block",
+		title: "blocked",
+		timeoutMs: 1000,
+		preconditions: () => ({ ok: false, code: "missing_x", detail: "no x" }),
+		execute: async () => {
+			throw new Error("should not run");
+		},
+	});
+	try {
+		const res = await runSkill("test.precondition-block", ctx);
+		assert.equal(res.ok, false);
+		assert.equal(res.code, "missing_x");
+		assert.equal(res.detail, "no x");
+	} finally {
+		teardown();
+	}
+});
+
+test("preconditions that throw produce precondition_failed", async () => {
+	const teardown = _registerForTest({
+		id: "test.precondition-throw",
+		preconditions: () => {
+			throw new Error("kaboom");
+		},
+		execute: async () => ({ ok: true }),
+	});
+	try {
+		const res = await runSkill("test.precondition-throw", ctx);
+		assert.equal(res.ok, false);
+		assert.equal(res.code, RUNNER_CODES.PRECONDITION_FAILED);
+		assert.match(res.detail, /kaboom/);
+	} finally {
+		teardown();
+	}
+});
+
+test("timeout fires and recover is called", async () => {
+	let recovered = false;
+	const teardown = _registerForTest({
+		id: "test.timeout",
+		timeoutMs: 50,
+		preconditions: () => ({ ok: true }),
+		execute: () =>
+			new Promise((resolve) => {
+				// never resolves within the timeout
+				setTimeout(() => resolve({ ok: true }), 500);
+			}),
+		recover: () => {
+			recovered = true;
+			return { hint: "retry-later" };
+		},
+	});
+	try {
+		const res = await runSkill("test.timeout", ctx);
+		assert.equal(res.ok, false);
+		assert.equal(res.code, RUNNER_CODES.TIMEOUT);
+		assert.equal(recovered, true);
+		assert.deepEqual(res.recovery, { hint: "retry-later" });
+	} finally {
+		teardown();
+	}
+});
+
+test("execute throw -> threw code with recovery hint", async () => {
+	const teardown = _registerForTest({
+		id: "test.throws",
+		preconditions: () => ({ ok: true }),
+		execute: async () => {
+			throw new Error("oops");
+		},
+		recover: (ctx, result) => ({ saw: result.code }),
+	});
+	try {
+		const res = await runSkill("test.throws", ctx);
+		assert.equal(res.ok, false);
+		assert.equal(res.code, RUNNER_CODES.THREW);
+		assert.match(res.detail, /oops/);
+		assert.deepEqual(res.recovery, { saw: RUNNER_CODES.THREW });
+	} finally {
+		teardown();
+	}
+});
+
+test("happy path returns done with worldDelta", async () => {
+	const teardown = _registerForTest({
+		id: "test.happy",
+		preconditions: () => ({ ok: true }),
+		execute: async () => ({ ok: true, code: "done", detail: { count: 4 }, worldDelta: { gathered: 4 } }),
+	});
+	try {
+		const res = await runSkill("test.happy", ctx);
+		assert.equal(res.ok, true);
+		assert.equal(res.code, "done");
+		assert.deepEqual(res.worldDelta, { gathered: 4 });
+	} finally {
+		teardown();
+	}
+});
+
+test("validate failure flips ok to false with validation_failed", async () => {
+	let recoverArgs = null;
+	const teardown = _registerForTest({
+		id: "test.validate-fail",
+		preconditions: () => ({ ok: true }),
+		execute: async () => ({ ok: true, code: "done", worldDelta: { x: 1 } }),
+		validate: () => false,
+		recover: (ctx, result) => {
+			recoverArgs = result;
+			return null;
+		},
+	});
+	try {
+		const res = await runSkill("test.validate-fail", ctx);
+		assert.equal(res.ok, false);
+		assert.equal(res.code, RUNNER_CODES.VALIDATION_FAILED);
+		assert.ok(recoverArgs);
+		assert.equal(recoverArgs.code, RUNNER_CODES.VALIDATION_FAILED);
+	} finally {
+		teardown();
+	}
+});
+
+test("result missing code defaults to runner DONE on success", async () => {
+	const teardown = _registerForTest({
+		id: "test.no-code",
+		preconditions: () => ({ ok: true }),
+		execute: async () => ({ ok: true }),
+	});
+	try {
+		const res = await runSkill("test.no-code", ctx);
+		assert.equal(res.ok, true);
+		assert.equal(res.code, RUNNER_CODES.DONE);
+	} finally {
+		teardown();
+	}
+});

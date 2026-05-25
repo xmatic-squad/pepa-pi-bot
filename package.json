@@ -15,7 +15,8 @@
     "bot:bare": "node runtime/bot.js",
     "tui": "tsx tui/tui.tsx",
     "propose:apply": "node scripts/propose-apply.js",
-    "stop": "bash scripts/stop.sh"
+    "stop": "bash scripts/stop.sh",
+    "test": "node --test runtime/skills/contract.test.js runtime/skills/groups.test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
