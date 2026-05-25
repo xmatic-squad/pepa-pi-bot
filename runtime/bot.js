@@ -31,6 +31,7 @@ import {
 	approveProposal,
 } from "./state-store.js";
 import { startAutoImprover } from "./auto-improve.js";
+import { startPlanner } from "./planner.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -658,3 +659,4 @@ ipc = createIpcServer({
 connect();
 startTickLoop();
 startAutoImprover();
+startPlanner(() => lastSnapshot);

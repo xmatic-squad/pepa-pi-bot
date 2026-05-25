@@ -359,6 +359,151 @@ export async function wander(bot, radius = 12) {
 	}
 }
 
+// ---- crafting --------------------------------------------------------------
+//
+// Mineflayer's crafting API is two-step: find a recipe with bot.recipesFor()
+// (which considers what's in inventory + nearby crafting tables), then call
+// bot.craft(recipe, count, tableBlock?). For "needs a table" items the
+// caller must place one within ~3 blocks first or pass the table block.
+//
+// We keep the actions small and explicit so the tech-tree reflex can compose
+// them: chop → planks → sticks → table → axe → keep chopping (now faster).
+
+function getItemCount(bot, name) {
+	return bot.inventory.items().reduce((sum, i) => (i.name === name ? sum + i.count : sum), 0);
+}
+
+function getAnyPlanksCount(bot) {
+	return bot.inventory
+		.items()
+		.reduce((sum, i) => (i.name.endsWith("_planks") ? sum + i.count : sum), 0);
+}
+
+function getAnyLogCount(bot) {
+	return bot.inventory.items().reduce((sum, i) => (i.name.endsWith("_log") ? sum + i.count : sum), 0);
+}
+
+// Pick a recipe by item-name regardless of table presence.
+function findRecipe(bot, itemName, tableBlock = null) {
+	const mcdata = bot.registry ?? null;
+	const itemId = mcdata?.itemsByName?.[itemName]?.id;
+	if (itemId == null) return null;
+	const recipes = bot.recipesFor(itemId, null, 1, tableBlock);
+	return recipes[0] ?? null;
+}
+
+async function craftRecipe(bot, itemName, count = 1, tableBlock = null) {
+	const recipe = findRecipe(bot, itemName, tableBlock);
+	if (!recipe) {
+		return { ok: false, detail: `no recipe for ${itemName} (have: ${summarizeInv(bot)})` };
+	}
+	try {
+		await withTimeout(bot.craft(recipe, count, tableBlock), 15_000, `craft(${itemName})`);
+		return { ok: true, detail: { item: itemName, count } };
+	} catch (e) {
+		return { ok: false, detail: `craft(${itemName}): ${e.message}` };
+	}
+}
+
+function summarizeInv(bot) {
+	const items = bot.inventory.items();
+	if (!items.length) return "empty";
+	return items
+		.slice(0, 5)
+		.map((i) => `${i.name}×${i.count}`)
+		.join(",");
+}
+
+// Convert any wood logs into planks (4 planks per log). Picks the first log
+// type we have. Most recipes don't need a table.
+export async function craftPlanks(bot, count = 4) {
+	const log = bot.inventory.items().find((i) => i.name.endsWith("_log"));
+	if (!log) return { ok: false, detail: "no log in inventory" };
+	const planks = log.name.replace("_log", "_planks");
+	info("action", `craft: ${count} ${planks} (from ${log.name})`);
+	return craftRecipe(bot, planks, Math.ceil(count / 4));
+}
+
+// 2 planks → 4 sticks. No table needed.
+export async function craftSticks(bot, count = 4) {
+	if (getAnyPlanksCount(bot) < 2) return { ok: false, detail: "need 2 planks" };
+	info("action", `craft: ${count} sticks`);
+	return craftRecipe(bot, "stick", Math.ceil(count / 4));
+}
+
+// Place a crafting table at the bot's feet+1 (or near). Returns the placed
+// block so subsequent craft calls can pass it as tableBlock.
+export async function placeCraftingTable(bot) {
+	// Already placed nearby?
+	const existing = bot.findBlock({
+		matching: (b) => b && b.name === "crafting_table",
+		maxDistance: 4,
+	});
+	if (existing) return { ok: true, detail: { at: existing.position, reused: true }, block: existing };
+
+	// Need to craft one first if we don't have it.
+	if (getItemCount(bot, "crafting_table") === 0) {
+		if (getAnyPlanksCount(bot) < 4) {
+			return { ok: false, detail: "need 4 planks to craft a table" };
+		}
+		const craftRes = await craftRecipe(bot, "crafting_table", 1);
+		if (!craftRes.ok) return craftRes;
+	}
+
+	// Pick a placement target — block beside the bot at foot level + 1 face.
+	const here = bot.entity.position;
+	const referenceBlock = bot.blockAt(here.offset(0, -1, 0));
+	if (!referenceBlock) return { ok: false, detail: "no reference block beneath bot" };
+
+	const tableItem = bot.inventory.items().find((i) => i.name === "crafting_table");
+	try {
+		await withTimeout(bot.equip(tableItem, "hand"), 3000, "equip table");
+		await withTimeout(
+			bot.placeBlock(referenceBlock, { x: 0, y: 1, z: 0 }),
+			5000,
+			"placeBlock(table)",
+		);
+	} catch (e) {
+		return { ok: false, detail: `place table: ${e.message}` };
+	}
+	const placed = bot.findBlock({
+		matching: (b) => b && b.name === "crafting_table",
+		maxDistance: 4,
+	});
+	info("action", `craft: placed crafting_table at ${placed?.position}`);
+	return { ok: true, detail: { at: placed?.position, reused: false }, block: placed };
+}
+
+export async function craftWoodenAxe(bot) {
+	const tableRes = await placeCraftingTable(bot);
+	if (!tableRes.ok) return tableRes;
+	if (getAnyPlanksCount(bot) < 3) return { ok: false, detail: "need 3 planks" };
+	if (getItemCount(bot, "stick") < 2) return { ok: false, detail: "need 2 sticks" };
+	info("action", `craft: wooden_axe`);
+	return craftRecipe(bot, "wooden_axe", 1, tableRes.block);
+}
+
+export async function craftWoodenPickaxe(bot) {
+	const tableRes = await placeCraftingTable(bot);
+	if (!tableRes.ok) return tableRes;
+	if (getAnyPlanksCount(bot) < 3) return { ok: false, detail: "need 3 planks" };
+	if (getItemCount(bot, "stick") < 2) return { ok: false, detail: "need 2 sticks" };
+	info("action", `craft: wooden_pickaxe`);
+	return craftRecipe(bot, "wooden_pickaxe", 1, tableRes.block);
+}
+
+export async function craftWoodenSword(bot) {
+	const tableRes = await placeCraftingTable(bot);
+	if (!tableRes.ok) return tableRes;
+	if (getAnyPlanksCount(bot) < 2) return { ok: false, detail: "need 2 planks" };
+	if (getItemCount(bot, "stick") < 1) return { ok: false, detail: "need 1 stick" };
+	info("action", `craft: wooden_sword`);
+	return craftRecipe(bot, "wooden_sword", 1, tableRes.block);
+}
+
+// Re-exported helpers for the reflex layer.
+export const inv = { getItemCount, getAnyPlanksCount, getAnyLogCount };
+
 // ---- navigation (for operator come/follow) --------------------------------
 
 export async function goTo(bot, x, y, z, minDistance = 2) {
