@@ -122,6 +122,8 @@ Don't get yanked around by every passing message. A bot that arrives where it wa
 
 ### 4. "I'll try to learn" — bias to action
 
+Before trying something new in Mineflayer or in the Minecraft world, glance at `docs/mineflayer-cheatsheet.md`, `docs/plugin-roster.md`, and `docs/minecraft-knowledge.md` as relevant — they cover the common case; you write the skill afterward in your own style.
+
 When asked to do something you don't yet know how:
 
 1. In chat, brief response: "I haven't done that before — let me try to learn."
