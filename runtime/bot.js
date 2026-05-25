@@ -34,7 +34,10 @@ import {
 	approveProposal,
 } from "./state-store.js";
 import { startAutoImprover } from "./auto-improve.js";
-import { startPlanner } from "./planner.js";
+import { startPlanner, isPlannerBusy, readNextMilestone, planExists } from "./planner.js";
+import { computeState, STATES } from "./state.js";
+import { createNoProgressDetector } from "./no-progress.js";
+import { maybeStartViewer } from "./viewer.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -54,6 +57,17 @@ let lastSnapshot = { connected: false };
 
 let consecutiveNoops = 0;
 let lastEscalationAt = 0;
+
+// Observability state — surfaced in every STATUS snapshot so the TUI (and
+// future Telegram/diary surfaces) can answer "what is the bot doing and why
+// isn't it doing more?" without parsing the log stream.
+const noProgress = createNoProgressDetector();
+let lastResult = null; // { label, ok, code, detail, ts }
+let lastFailureAt = 0;
+let lastPlanReadAt = 0;
+let cachedMilestone = null;
+let cachedPlanExists = false;
+const MILESTONE_CACHE_MS = 30_000;
 
 // Reflex context — passed into reflex.js every tick. Mutable across ticks.
 const reflexCtx = {
@@ -150,8 +164,19 @@ function dispatchAction(fn, label, opts = {}) {
 				`← ${label} ${ok ? "ok" : "fail"}${res?.detail ? ` (${JSON.stringify(res.detail).slice(0, 80)})` : ""}`,
 			);
 			writeCurrentTask({ label, status: ok ? "completed" : "failed", detail: res?.detail });
-			if (!ok) recordFailure(label, res?.detail);
-			else clearRecentFailures(label);
+			lastResult = {
+				label,
+				ok,
+				code: res?.code ?? (ok ? "done" : classifyFailure(res?.detail)),
+				detail: res?.detail,
+				ts: Date.now(),
+			};
+			if (!ok) {
+				lastFailureAt = lastResult.ts;
+				recordFailure(label, res?.detail);
+			} else {
+				clearRecentFailures(label);
+			}
 
 			if (opts.onComplete) {
 				try {
@@ -164,6 +189,14 @@ function dispatchAction(fn, label, opts = {}) {
 		.catch((e) => {
 			warn("dispatch", `${label} threw: ${e?.message ?? e}`);
 			writeCurrentTask({ label, status: "threw", detail: String(e?.message ?? e) });
+			lastResult = {
+				label,
+				ok: false,
+				code: "threw",
+				detail: String(e?.message ?? e),
+				ts: Date.now(),
+			};
+			lastFailureAt = lastResult.ts;
 			recordFailure(label, String(e?.message ?? e));
 		})
 		.finally(() => {
@@ -391,6 +424,7 @@ function connect() {
 		info("mc", `spawned at ${JSON.stringify(bot.entity.position)}`);
 		appendDiary(`spawned at ${bot.entity.position.x.toFixed(0)},${bot.entity.position.y.toFixed(0)},${bot.entity.position.z.toFixed(0)}`);
 		ipc?.broadcast(EVENT_TYPES.STATUS, buildSnapshot(bot));
+		maybeStartViewer(bot).catch((e) => warn("viewer", `start threw: ${e?.message ?? e}`));
 	});
 
 	bot.on("messagestr", (text) => {
@@ -481,8 +515,29 @@ function maybeAutoEscalate() {
 
 // ---- tick ------------------------------------------------------------------
 
+function failuresByCode() {
+	const counts = {};
+	for (const f of reflexCtx.recentFailures) {
+		const k = f.kind || "other";
+		counts[k] = (counts[k] ?? 0) + 1;
+	}
+	return counts;
+}
+
+function refreshMilestoneCache(now) {
+	if (now - lastPlanReadAt < MILESTONE_CACHE_MS) return;
+	lastPlanReadAt = now;
+	try {
+		cachedMilestone = readNextMilestone();
+		cachedPlanExists = planExists();
+	} catch (e) {
+		warn("planner", `milestone read failed: ${e.message}`);
+	}
+}
+
 function tick() {
 	if (shuttingDown) return;
+	const now = Date.now();
 	if (bot && bot.entity) {
 		lastSnapshot = buildSnapshot(bot);
 		lastSnapshot.pendingProposals = listProposals().length;
@@ -502,6 +557,40 @@ function tick() {
 				consecutiveNoops = 0;
 			}
 		}
+
+		// Observability: compute runtime state + no-progress reason and
+		// stamp them on the snapshot so the TUI / future surfaces can show
+		// one concrete answer to "why is the bot idle?".
+		refreshMilestoneCache(now);
+		const plannerInFlight = isPlannerBusy();
+		const runtimeState = computeState({
+			snapshot: lastSnapshot,
+			ctx: reflexCtx,
+			plannerInFlight,
+			lastChatReplyAt,
+			lastFailureAt,
+			now,
+		});
+		const noProgressReason = noProgress.detect({
+			snapshot: lastSnapshot,
+			ctx: reflexCtx,
+			planExists: cachedPlanExists,
+			now,
+		});
+
+		lastSnapshot.runtimeState = runtimeState;
+		lastSnapshot.activeSkill = reflexCtx.busy
+			? reflexCtx.currentActionLabel
+			: reflexCtx.lastReflex?.label ?? null;
+		lastSnapshot.currentMilestone = cachedMilestone;
+		lastSnapshot.lastResult = lastResult;
+		lastSnapshot.noProgressReason = noProgressReason;
+		lastSnapshot.failuresByCode = failuresByCode();
+		lastSnapshot.lastEscalation = lastEscalationAt
+			? { ts: lastEscalationAt, ageMs: now - lastEscalationAt }
+			: null;
+		lastSnapshot.reflexPaused = reflexPaused;
+
 		ipc?.broadcast(EVENT_TYPES.STATUS, lastSnapshot);
 	} else {
 		lastSnapshot = { connected: false };

@@ -150,6 +150,31 @@ should only suggest what to do *with the existing tools*. If a deeper
 problem is happening, the failure-tracker (see Self-improvement) will
 file a proposal instead.
 
+## Observability (Phase 1 — survival-bot pivot)
+
+Every STATUS snapshot now carries fields the TUI uses to answer
+"what is the bot doing and why isn't it doing more?" without
+parsing the log stream:
+
+| Field | Meaning |
+|-------|---------|
+| `runtimeState` | finite-state classification: `emergency` / `working` / `recovering` / `planning` / `social` / `idle` (see `runtime/state.js`). |
+| `activeSkill` | current dispatched action label, or the last one if idle. |
+| `currentMilestone` | first uncompleted line from `state/<host>/plan.md` (cached 30 s). |
+| `lastResult` | `{ label, ok, code, detail, ts }` of the most recent dispatched action. |
+| `noProgressReason` | one of `waiting_for_day`, `night_hostile_nearby`, `no_food_source`, `inventory_full`, `no_reachable_target`, `planner_empty`, `awaiting_action_cooldown`, … emitted when position + inventory have not changed for ≥60 s (see `runtime/no-progress.js`). |
+| `failuresByCode` | rolling counts of recent failures grouped by class (`bug` / `timeout` / `feature-gap` / `other`). |
+| `lastEscalation` | `{ ts, ageMs }` of the most recent Pi auto-escalation. |
+| `reflexPaused` | mirror of the local pause flag (so TUI shows the right state immediately). |
+
+### Optional: prismarine-viewer
+
+Set `VIEWER_PORT=<port>` in `.env` to launch
+[`prismarine-viewer`](https://github.com/PrismarineJS/prismarine-viewer)
+in-process. The package is **not** a default dep — install it explicitly
+(`npm i prismarine-viewer`) before enabling. If missing, the runtime
+logs a warning and continues.
+
 ## In-game chat (dialog-only)
 
 As of the Phase 0 survival-bot pivot, MC chat does **not** drive bot
