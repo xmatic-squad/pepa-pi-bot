@@ -6,11 +6,12 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Operator                                                   │
-│  (human — in-game chat, repo edits, .env)                   │
+│  Human                                                      │
+│  - control plane: repo edits (AGENTS.md, skills/, .env)     │
+│  - comms plane:   in-game chat (untrusted, dialog only)     │
 └─────┬────────────────────────────────────────────┬──────────┘
       │                                            │
-      │ chat / edit AGENTS.md                      │ optional: Telegram (future)
+      │ edit repo / .env                           │ optional: Telegram (future)
       ▼                                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Pi runtime                                                 │
