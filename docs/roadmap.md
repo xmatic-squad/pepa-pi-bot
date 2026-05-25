@@ -31,17 +31,27 @@ The bot can be **summoned** by chat: "come to 100 64 -200", "follow me", "go to 
 
 Stretch: `mc_position_share()` so the bot can answer "where are you?".
 
-## Phase 3 — Best life when idle 🌱
+## Phase 3 — Best life when idle / goal-driven autonomy 🌿 (kickoff)
 
-When chat is quiet for some threshold (e.g. 10 minutes of no addressed/non-trivial messages), the bot switches to **autonomous mode**:
+When chat is quiet for some threshold (5-10 minutes of no addressed/non-trivial messages), the bot switches to **autonomous mode**.
 
-- Builds a small base somewhere safe, away from player builds.
-- Farms (wood, food, basic resources). Stores in chests at the base.
-- Explores cautiously — no caves without torches, no nether yet.
-- Logs what it did into `state/<host>/diary/YYYY-MM-DD.md`.
-- Drops back into "presence" mode the moment a human says something.
+Now it is **goal-driven**, not just idle-active:
 
-This is where the agent should be most prolific in writing new skills (`farming-wheat`, `chest-organizer`, `careful-cave-mining`, etc.).
+- A long-term goal lives in `state/<MC_HOST>/goal.md` (e.g. "build a small village and survive"). Personal memory, see `docs/memory-model.md`.
+- Decomposed into milestones in `state/<MC_HOST>/plan.md`.
+- Current action is checkpointed in `state/<MC_HOST>/current-task.json` for resume-on-restart.
+- Daily journal in `state/<MC_HOST>/diary/YYYY-MM-DD.md`.
+
+Priority loop (highest to lowest):
+1. Live operator task → drop everything, do it.
+2. Live non-operator chat → reply briefly.
+3. Resume `current-task.json` if interrupted.
+4. Next milestone in `plan.md`.
+5. Decompose `goal.md` → new plan.
+
+Concrete activities while autonomous: scout/build modest base, farm food, store in chests, light area, defend at night, explore cautiously, build out toward the goal. Skills emerge: `farming-wheat`, `chest-organizer`, `careful-cave-mining`, `village-layout`, etc.
+
+Kicked off via [`prompts/live-your-life.md`](../prompts/live-your-life.md).
 
 ## Phase 4 — Telegram bridge 🌱
 

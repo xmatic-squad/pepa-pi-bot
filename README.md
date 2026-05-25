@@ -160,7 +160,11 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 
 🌳 **Phase 1 — Presence** implemented and operator trust wired: the bridge stays online with bounded reconnects, keeps a rolling chat buffer, exposes status/recent-chat/operator/escalation tools, applies `OPERATOR_USERNAMES` as scope-only trust, and can prompt the Pi loop to reply sparingly. Phase 5 self-extension is documented and in progress; Phase 6 escalation logging is implemented.
 
-Full plan: [`docs/roadmap.md`](./docs/roadmap.md). Day-to-day judgement principles live under "Operating principles" in [`AGENTS.md`](./AGENTS.md).
+🌿 **Phase 2 — Locomotion with guard rails** in progress (operator task: build a 5×5 pyramid; `mineflayer-pathfinder` installed).
+
+🌱 **Phase 3 — Goal-driven autonomy** seeded: [`docs/memory-model.md`](./docs/memory-model.md) defines shared-knowledge vs personal-memory; per-server `goal.md` / `plan.md` / `current-task.json` / `diary/` shape autonomous behaviour. Kickoff via [`prompts/live-your-life.md`](./prompts/live-your-life.md).
+
+Full plan: [`docs/roadmap.md`](./docs/roadmap.md). Memory layout: [`docs/memory-model.md`](./docs/memory-model.md). Day-to-day judgement: "Operating principles" in [`AGENTS.md`](./AGENTS.md).
 
 ## License
 
