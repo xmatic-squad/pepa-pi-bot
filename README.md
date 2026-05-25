@@ -156,7 +156,11 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 
 ## Status
 
-🌳 **Bridge online.** The project-local Mineflayer bridge loads via `.pi/settings.json`, connects through the server's ViaVersion/ViaBackwards stack with an explicit supported client version from `.env`, registers `mc_chat`, `mc_position`, and `mc_disconnect`, handled first-join AuthMe-style registration, and sent `hello` in chat. First onboarding notes are captured in `skills/server-onboarding.md`.
+🌳 **Phase 0 — Body** done. Bridge online, AuthMe handled, `hello` sent. See `skills/server-onboarding.md`.
+
+🌱 **Phase 1 — Presence** is the current target: bot stays online, reacts to chat, survives disconnects within bounds.
+
+Full plan: [`docs/roadmap.md`](./docs/roadmap.md). Day-to-day judgement principles live under "Operating principles" in [`AGENTS.md`](./AGENTS.md).
 
 ## License
 
