@@ -189,53 +189,70 @@ The protocol is intentionally tiny — anyone can write a second client
 (a Telegram bridge, a web UI, a one-shot CLI) by reading
 `runtime/ipc-protocol.js`.
 
-## Self-improvement loop
+## Self-improvement loop (fully autonomous)
 
-End-to-end and wired. The flow:
+End-to-end, no operator-in-the-loop. The bot writes proposals when it
+spots a *real* bug, applies them with Pi headless, and rolls them back
+if they break things. The flow:
 
 ```
-1. reflex chain dispatches an action → action returns { ok: false, detail }
-2. bot.js failure tracker accumulates the failure under its label
-3. same label fails 3× in a row → writeProposal() → markdown lands in
-   state/<host>/proposals/<ts>-<slug>.md
-4. next IPC STATUS event includes pendingProposals: N
-5. TUI shows [proposals N, press y] badge
-6. operator presses y, reads the proposal, presses y again to approve
-7. proposal moves to state/<host>/proposals/approved/
-8. operator runs:   npm run propose:apply <filename>
-9. script verifies clean working tree, creates feat/proposal-<slug>
-   branch, spawns `pi -p` with the proposal + repo-conventions prompt
-10. Pi commits a patch on that branch (no push, no merge)
-11. operator reviews diff, runs `npm run bot` to smoke-test
-12. operator pushes the branch and opens a PR by hand
-13. supervisor on the running bot picks up runtime/*.js changes and
-    hot-restarts the child the moment they hit disk
+1. reflex dispatches action → action returns { ok: false, detail }
+2. bot.js failure tracker classifies the detail:
+     bug          → TypeError / Cannot read / is not defined …
+     timeout      → "timed out after Ns"
+     feature-gap  → "no reachable log", "no food", "no bed" …
+     other        → anything else
+3. 5 consecutive failures with the SAME label, where the run is dominated
+   by 'bug' or all 'timeout' → writeProposal()
+   (feature gaps are SKIPPED — reflex routing solves those, not the LLM)
+4. runtime/auto-improve.js watcher (poll 2s) sees the new file,
+   debounces 10s, then spawns scripts/auto-patch.js detached
+5. auto-patch.js:
+     - refuses on dirty tree
+     - moves proposal pending → approved/ (audit trail)
+     - creates branch auto/<slug> off main
+     - runs `pi -p "<patch prompt>"` with 10-min timeout
+     - if Pi committed AND only touched runtime/ → cherry-pick onto main
+     - else → discard branch, exit non-zero
+6. supervisor's runtime/*.js watcher fires the moment the cherry-pick
+   lands → child restarts on the new code
+7. if the new code crashes >5 times in 60s AND the last commit on main
+   is younger than 15 min AND it touched runtime/ → supervisor
+   `git reset --hard HEAD~1` and restarts. Up to MAX_ROLLBACKS times
+   per supervisor lifetime, then bails out for manual investigation.
 ```
 
-Operator is in the loop at three guardrails: approving the proposal,
-reviewing Pi's diff, deciding to merge.
+### Rate limits
 
-### Triggers (today)
+- **Proposal cooldown**: 30 min between proposal files of any kind.
+- **Auto-improve cooldown**: 15 min between finished `auto-patch.js` runs.
+- **Hourly cap**: max 4 auto-patches per hour, even if cooldown allows.
+- **Rollback cap**: 3 rollbacks per supervisor lifetime; after that the
+  supervisor exits and waits for human review.
 
-Only one detector is wired: "same labelled action fails 3 times in a
-row" — for example, three back-to-back `flee from zombie` failures.
-30 min cooldown so the same proposal doesn't multiply when the bot
-keeps trying.
+### What counts as a bug
 
-More triggers worth adding (each as a small follow-up):
-- "Pi auto-escalation fired but the snapshot didn't change in the next
-  N ticks" → bot is fundamentally stuck, propose a code change.
-- "death count >K in M minutes at similar coords" → safety regression.
-- "operator typed the same chat command twice and the bot couldn't act"
-  → missing operator verb.
+`runtime/bot.js` ships two whitelists (`NORMAL_FAILURE_SUBSTRINGS` and
+`BUG_FAILURE_SUBSTRINGS`). The proposal trigger fires only when:
+- the trailing run of same-label failures contains at least one bug
+  (TypeError / ReferenceError / "Cannot read properties" / etc.),
+- OR every failure in the run is a timeout (and they happened on the
+  same operation, so it's probably broken not just unreachable).
 
-### Why a manual `propose:apply` step
+Feature gaps like "no reachable log within 32 blocks" are *not* a bug
+— the autonomous reflex sees that result, sets `noTreesUntil` and
+switches to wander. If the script can't solve it via reflex routing,
+that's a design issue the operator fixes by editing `runtime/reflex.js`
+directly — not by asking Pi to patch around it.
 
-Approval inside the TUI is cheap — one keypress. Spawning Pi to write a
-patch is not (subscription tokens, multiple minutes). Splitting "I want
-this addressed" (TUI) from "now actually run the patcher" (CLI) means
-you can approve five proposals over a session and dispatch them in a
-batch when convenient.
+### Manual escape hatches
+
+These still work but should rarely be needed:
+- TUI hotkey `y` opens the latest pending proposal for inspection.
+- `npm run propose:apply <filename>` runs the *attended* version of the
+  patcher — leaves the result on a `feat/proposal-<slug>` branch
+  without cherry-picking, so the operator can review the diff manually.
+- `npm run stop` kills everything and clears lock/socket.
 
 ## File layout
 

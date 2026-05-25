@@ -11,7 +11,7 @@
 // Run via `npm run bot`. Falls back to plain `node runtime/bot.js` via
 // `npm run bot:bare` if you want to skip the supervisor.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,11 +21,17 @@ import { stateDir } from "./config.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const RUNTIME_DIR = __dirname;
+const REPO_ROOT = path.resolve(RUNTIME_DIR, "..");
 const BOT_ENTRY = path.join(RUNTIME_DIR, "bot.js");
 
 export const RELOAD_EXIT_CODE = 42;
 const WATCH_DEBOUNCE_MS = 800;
 const MAX_RESTARTS_PER_MINUTE = 5;
+// When a recent auto-patch breaks the bot, we roll it back. "Recent" =
+// landed on main within the last ROLLBACK_FRESHNESS_MS. The signal is
+// MAX_RESTARTS_PER_MINUTE exceeded — i.e. the patch reliably crashes.
+const ROLLBACK_FRESHNESS_MS = 15 * 60_000;
+const MAX_ROLLBACKS = 3; // hard ceiling per supervisor lifetime
 
 // Pidfile prevents two supervisors from racing on the same MC nickname. The
 // Minecraft server refuses the second login ("Игрок с данным никнеймом уже
@@ -37,6 +43,37 @@ const PID_FILE = path.join(stateDir, "supervisor.pid");
 let child = null;
 let restartingDueToWatch = false;
 const restartTimestamps = [];
+let rollbackCount = 0;
+
+function lastCommitAgeMs() {
+	const res = spawnSync("git", ["log", "-1", "--format=%ct", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" });
+	if (res.status !== 0) return Number.POSITIVE_INFINITY;
+	const epochSec = Number.parseInt(res.stdout.trim(), 10);
+	if (!Number.isFinite(epochSec)) return Number.POSITIVE_INFINITY;
+	return Date.now() - epochSec * 1000;
+}
+
+function lastCommitTouchedRuntime() {
+	const res = spawnSync("git", ["diff", "--name-only", "HEAD~1..HEAD"], { cwd: REPO_ROOT, encoding: "utf8" });
+	if (res.status !== 0) return false;
+	return res.stdout.split("\n").some((f) => f.startsWith("runtime/"));
+}
+
+function rollbackLastCommit() {
+	const sha = spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).stdout.trim();
+	console.log(`[supervisor] rolling back HEAD (${sha.slice(0, 8)})`);
+	const reset = spawnSync("git", ["reset", "--hard", "HEAD~1"], {
+		cwd: REPO_ROOT,
+		encoding: "utf8",
+		stdio: "inherit",
+	});
+	if (reset.status !== 0) {
+		console.error(`[supervisor] git reset failed — operator intervention needed`);
+		return false;
+	}
+	rollbackCount++;
+	return true;
+}
 
 function nowMs() {
 	return Date.now();
@@ -97,6 +134,20 @@ function spawnChild() {
 		restartTimestamps.push(now);
 		while (restartTimestamps.length && now - restartTimestamps[0] > 60_000) restartTimestamps.shift();
 		if (restartTimestamps.length > MAX_RESTARTS_PER_MINUTE) {
+			// Crash loop. If the last commit is young AND touched runtime/, it
+			// probably broke us — roll it back and try once more.
+			const ageMs = lastCommitAgeMs();
+			if (
+				ageMs < ROLLBACK_FRESHNESS_MS &&
+				lastCommitTouchedRuntime() &&
+				rollbackCount < MAX_ROLLBACKS &&
+				rollbackLastCommit()
+			) {
+				console.log(`[supervisor] auto-rollback ${rollbackCount}/${MAX_ROLLBACKS} applied; restart counters reset`);
+				restartTimestamps.length = 0;
+				setTimeout(spawnChild, 500);
+				return;
+			}
 			console.error(`[supervisor] too many restarts (${restartTimestamps.length} in 60s) — giving up`);
 			process.exit(1);
 		}

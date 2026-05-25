@@ -30,6 +30,7 @@ import {
 	readProposal,
 	approveProposal,
 } from "./state-store.js";
+import { startAutoImprover } from "./auto-improve.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -136,7 +137,9 @@ function dispatchAction(fn, label, opts = {}) {
 	}
 	reflexCtx.busy = true;
 	reflexCtx.currentActionLabel = label;
-	writeCurrentTask({ label, status: "in_progress", snapshot: lastSnapshot });
+	// current-task is a resume anchor — keep it small. Embedding the full
+	// perception snapshot blows the file up to ~3 KB per write × every action.
+	writeCurrentTask({ label, status: "in_progress", position: lastSnapshot.position });
 	info("dispatch", `→ ${label}`);
 	Promise.resolve()
 		.then(() => fn())
@@ -170,14 +173,56 @@ function dispatchAction(fn, label, opts = {}) {
 }
 
 // ---- failure tracking + proposal detection --------------------------------
+//
+// A proposal is a request to the LLM to patch the codebase. They cost tokens
+// and may produce risky patches that need rolling back. We file them ONLY for
+// failures that genuinely look like bugs the reflex layer can't handle on its
+// own. Everything else is a feature gap the script should solve via reflex
+// chain reordering, cooldowns, or new primitives.
 
-const PROPOSAL_THRESHOLD = 3; // same labelled action fails 3+ times in a row
+const PROPOSAL_THRESHOLD = 5; // raised from 3 to dampen spam
 let lastProposalAt = 0;
-const PROPOSAL_COOLDOWN_MS = 30 * 60 * 1000; // don't spam proposal files
+const PROPOSAL_COOLDOWN_MS = 30 * 60 * 1000;
+
+// Detail substrings that mean "this is a known feature gap, the bot handles
+// it via reflex routing already". Don't file a proposal — the bot will switch
+// strategies on its own. If something here is wrong, fix the routing.
+const NORMAL_FAILURE_SUBSTRINGS = [
+	"no reachable log",
+	"no log within",
+	"no bed in range",
+	"no food in inventory",
+	"no target in reach",
+	"rate-limited",
+	"can't see you nearby",
+	"returned false",
+	"no result",
+];
+
+// Detail substrings that look like a real bug — patch-worthy.
+const BUG_FAILURE_SUBSTRINGS = [
+	"TypeError",
+	"ReferenceError",
+	"Cannot read properties",
+	"is not a function",
+	"is not iterable",
+	"is not defined",
+	"unknown block",
+	"unknown item",
+];
+
+function classifyFailure(detail) {
+	const s = String(detail ?? "");
+	if (BUG_FAILURE_SUBSTRINGS.some((sub) => s.includes(sub))) return "bug";
+	if (NORMAL_FAILURE_SUBSTRINGS.some((sub) => s.includes(sub))) return "feature-gap";
+	if (s.includes("timed out")) return "timeout";
+	return "other";
+}
 
 function recordFailure(label, detail) {
-	reflexCtx.recentFailures.push({ ts: Date.now(), label, detail });
-	if (reflexCtx.recentFailures.length > 10) reflexCtx.recentFailures.shift();
+	const kind = classifyFailure(detail);
+	reflexCtx.recentFailures.push({ ts: Date.now(), label, detail, kind });
+	if (reflexCtx.recentFailures.length > 20) reflexCtx.recentFailures.shift();
 	maybeFileProposal(label);
 }
 
@@ -186,7 +231,7 @@ function clearRecentFailures(label) {
 }
 
 function maybeFileProposal(label) {
-	// Count consecutive trailing failures with the same label.
+	// Same-label trailing run.
 	const trailing = [];
 	for (let i = reflexCtx.recentFailures.length - 1; i >= 0; i--) {
 		const f = reflexCtx.recentFailures[i];
@@ -195,11 +240,30 @@ function maybeFileProposal(label) {
 	}
 	if (trailing.length < PROPOSAL_THRESHOLD) return;
 	if (Date.now() - lastProposalAt < PROPOSAL_COOLDOWN_MS) return;
+
+	// Only file when the run is dominated by bug-class failures (any single
+	// bug counts) OR persistent timeouts on the same operation. Feature gaps
+	// are skipped — the reflex layer should re-route, not the LLM.
+	const anyBug = trailing.some((f) => f.kind === "bug");
+	const allTimeout = trailing.every((f) => f.kind === "timeout");
+	if (!anyBug && !allTimeout) return;
+
 	lastProposalAt = Date.now();
 
-	const summary = `${label} failed ${trailing.length}× in a row`;
+	const summary = `${label} failed ${trailing.length}× in a row (${anyBug ? "bug" : "persistent timeout"})`;
+	const slimSnapshot = lastSnapshot && {
+		position: lastSnapshot.position,
+		health: lastSnapshot.health,
+		food: lastSnapshot.food,
+		inventory: lastSnapshot.inventory,
+		isDay: lastSnapshot.isDay,
+		closestHostile: lastSnapshot.closestHostile,
+		dimension: lastSnapshot.dimension,
+	};
 	const body = [
 		`# Repeated failure: ${label}`,
+		"",
+		`Class: **${anyBug ? "bug" : "persistent timeout"}**.`,
 		"",
 		"## What happened",
 		"",
@@ -207,25 +271,27 @@ function maybeFileProposal(label) {
 		"",
 		"## Most recent failures",
 		"",
-		...trailing.slice(0, 5).map(
-			(f, i) => `${i + 1}. \`${new Date(f.ts).toISOString()}\` — ${JSON.stringify(f.detail).slice(0, 200)}`,
-		),
+		...trailing
+			.slice(0, 5)
+			.map(
+				(f, i) =>
+					`${i + 1}. \`${new Date(f.ts).toISOString()}\` [${f.kind}] ${JSON.stringify(f.detail).slice(0, 200)}`,
+			),
 		"",
-		"## Snapshot at moment of last failure",
+		"## Slim snapshot",
 		"",
 		"```json",
-		JSON.stringify(lastSnapshot, null, 2),
+		JSON.stringify(slimSnapshot, null, 2),
 		"```",
 		"",
-		"## Suggested next step",
+		"## Constraints for the patch",
 		"",
-		"Operator: review whether the reflex should:",
-		"- back off (cooldown extension)",
-		"- switch to a different action variant",
-		"- escalate to Pi for situational reasoning",
-		"- or whether the underlying primitive in `runtime/actions.js` needs work.",
-		"",
-		`Approve this proposal (move to \`proposals/approved/\`) and run \`npm run propose:apply <filename>\` to delegate a patch attempt to Pi headless.`,
+		"- Touch only files under `runtime/`. Don't touch `extensions/`, `tui/`, or any docs.",
+		"- Don't introduce new npm dependencies.",
+		"- Don't change `.env` or anything in `state/`.",
+		"- Don't push, don't open a PR. Commit on the current branch only.",
+		"- Prefer the smallest viable fix. A 3-line guard is better than a 30-line refactor.",
+		"- If the failure is genuinely irrecoverable (server-side, not code), document it in a code comment and exit 1.",
 	].join("\n");
 
 	const { filename } = writeProposal({ kind: `repeated-fail-${label}`, summary, body });
@@ -591,3 +657,4 @@ ipc = createIpcServer({
 });
 connect();
 startTickLoop();
+startAutoImprover();
