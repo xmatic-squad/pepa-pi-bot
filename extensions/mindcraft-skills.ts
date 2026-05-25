@@ -268,8 +268,12 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		async execute(_id, params: { blockType: string; count?: number }) {
 			const bot = getBot();
 			const count = Math.max(1, Math.min(64, Math.floor(params.count ?? 1)));
+			// Timeout scales with count: ~30s per block plus 30s overhead.
+			// Allows count=8 (about 4 min) without hanging forever on
+			// pathfinder-unreachable cases.
+			const timeoutMs = Math.min(600_000, 30_000 + count * 30_000);
 			const ok = await safeCall("collectBlock", () =>
-				withTimeout(skills.collectBlock(bot, params.blockType, count), 90_000, `collectBlock(${params.blockType}, ${count})`),
+				withTimeout(skills.collectBlock(bot, params.blockType, count), timeoutMs, `collectBlock(${params.blockType}, ${count})`),
 			);
 			return textResult(ok ? `Collected ${count} of ${params.blockType}.` : `collectBlock returned false for ${params.blockType}.`, { ok, blockType: params.blockType, count });
 		},
