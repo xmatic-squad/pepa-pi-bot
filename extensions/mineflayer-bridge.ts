@@ -419,6 +419,9 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 	let lastHumanChatAt = Date.now();
 	let lastAutonomyPromptAt = 0;
 	let startupMemoryReviewed = false;
+	let lastDeathAt = 0;
+	let autoDefendTimer: ReturnType<typeof setInterval> | undefined;
+	let lastAutoDefendAt = 0;
 
 	function log(event: string, detail?: unknown) {
 		const suffix = detail === undefined ? "" : `: ${truncate(redact(stringifyUnknown(detail), config))}`;
@@ -912,6 +915,57 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 		autonomyTimer = undefined;
 	}
 
+	// Auto-defend reflex — every 2 seconds while connected, check for hostile
+	// mobs within 6 blocks. If health is risky (<18) AND a hostile is close AND
+	// no active world task is in progress, fire-and-forget bot.pvp.attack on
+	// the nearest hostile. No LLM call needed for instant self-defense.
+	const HOSTILE_TYPES = new Set([
+		"zombie", "skeleton", "spider", "creeper", "enderman", "witch", "drowned",
+		"husk", "stray", "phantom", "pillager", "vindicator", "evoker", "ravager",
+		"zoglin", "vex", "warden", "guardian",
+	]);
+	function tickAutoDefend() {
+		if (!bot || activeWorldTask) return;
+		if (Date.now() - lastAutoDefendAt < 4000) return; // throttle to once per 4s
+		if (!bot.entity) return;
+		if ((bot.health ?? 20) >= 18) return; // healthy → don't bother
+		const me = bot.entity.position;
+		const entities = Object.values((bot as any).entities ?? {}) as Array<any>;
+		const threats = entities.filter((e) => {
+			if (!e || !e.position || !e.name) return false;
+			if (!HOSTILE_TYPES.has(String(e.name).toLowerCase())) return false;
+			try { return me.distanceTo(e.position) < 6; } catch { return false; }
+		});
+		if (!threats.length) return;
+		const nearest = threats.reduce((a, b) =>
+			me.distanceTo(a.position) <= me.distanceTo(b.position) ? a : b,
+		);
+		lastAutoDefendAt = Date.now();
+		log("auto-defend", `${nearest.name} at d=${Math.round(me.distanceTo(nearest.position))}, HP=${bot.health}`);
+		try {
+			const pvp = (bot as any).pvp;
+			if (pvp && typeof pvp.attack === "function") {
+				pvp.attack(nearest);
+			} else {
+				// Fallback: swing if entity is in reach.
+				if (me.distanceTo(nearest.position) < 3.5 && typeof (bot as any).attack === "function") {
+					(bot as any).attack(nearest);
+				}
+			}
+		} catch (e) { log("auto-defend-error", e); }
+	}
+	function startAutoDefendTimer() {
+		stopAutoDefendTimer();
+		autoDefendTimer = setInterval(() => {
+			try { tickAutoDefend(); } catch (error) { log("auto-defend-tick-error", error); }
+		}, 2000);
+		(autoDefendTimer as any).unref?.();
+	}
+	function stopAutoDefendTimer() {
+		if (autoDefendTimer) clearInterval(autoDefendTimer);
+		autoDefendTimer = undefined;
+	}
+
 	function queueOperatorLearning(rawFrom: string, rawText: string, entry: ChatEntry) {
 		const recent = recentChat.slice(-10).map(formatChatEntry).join("\n") || "(no recent chat)";
 		const prompt = [
@@ -1122,6 +1176,26 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 			reconnectPausedReason = undefined;
 			log("spawn");
 			startAuthDetection();
+			// If we just died, log the new spawn position in diary so the
+			// operator (and future restart) can see where the bot reset to.
+			if (lastDeathAt && Date.now() - lastDeathAt < 5000) {
+				try {
+					const pos = nextBot.entity?.position;
+					const where = pos ? `${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)}` : "unknown";
+					appendDiary(current, `respawned at ${where}`);
+				} catch (e) { log("respawn-diary-error", e); }
+				lastDeathAt = 0;
+			}
+		});
+		nextBot.on("death", () => {
+			const pos = nextBot.entity?.position;
+			const where = pos ? `${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)}` : "unknown";
+			log("death", `at ${where}`);
+			try {
+				appendDiary(current, `died at ${where} — clearing current-task`);
+				clearCurrentTask(current);
+			} catch (e) { log("death-handler-error", e); }
+			lastDeathAt = Date.now();
 		});
 		nextBot.on("chat", (username, message) => {
 			if (username !== current.username) lastHumanChatAt = Date.now();
@@ -1631,6 +1705,7 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 			surfaceEscalationCount();
 			connect("startup");
 			startAutonomyTimer();
+			startAutoDefendTimer();
 			if (ctx.hasUI) ctx.ui.setStatus("mineflayer", "mc: connecting");
 		} catch (error) {
 			log("startup-error", error);
@@ -1641,6 +1716,7 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 	pi.on("session_shutdown", async () => {
 		shuttingDown = true;
 		stopAutonomyTimer();
+		stopAutoDefendTimer();
 		disconnect({ manual: true });
 	});
 
