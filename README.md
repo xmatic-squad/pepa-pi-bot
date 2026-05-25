@@ -156,7 +156,7 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 
 ## Status
 
-🌿 **Bridge scaffolded.** The repo now includes a project-local Mineflayer bridge extension that registers `mc_chat`, `mc_position`, and `mc_disconnect`, reads `.env`, enforces chat rate limits, and attempts AuthMe-style onboarding. Current live connection is blocked before spawn because the configured server requires a protocol newer than the installed Mineflayer stack supports. The next milestone remains: spawn successfully, handle in-game auth if present, and send `hello` in chat.
+🌳 **Bridge online.** The project-local Mineflayer bridge loads via `.pi/settings.json`, connects through the server's ViaVersion/ViaBackwards stack with an explicit supported client version from `.env`, registers `mc_chat`, `mc_position`, and `mc_disconnect`, handled first-join AuthMe-style registration, and sent `hello` in chat. First onboarding notes are captured in `skills/server-onboarding.md`.
 
 ## License
 
