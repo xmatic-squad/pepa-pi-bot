@@ -10,8 +10,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Pi runtime state — sessions, caches, locally-installed extensions
-.pi/
+# Pi runtime state — sessions and cache are local-only.
+.pi/*
+# …but commit .pi/settings.json — it's the project's Pi config (installed
+# extensions, model defaults, etc.) and must be reproducible across clones.
+!.pi/settings.json
 sessions/
 *.session.json
 

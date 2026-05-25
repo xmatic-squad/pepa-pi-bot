@@ -55,10 +55,24 @@ When you encounter a missing capability, your loop is:
 
 1. **Decide** whether the capability is one-off (handle inline) or reusable (codify).
 2. If reusable, create either:
-   - a **skill** under `skills/<short-name>.md` — markdown, with a frontmatter header (`name`, `description`, `when_to_use`) and a procedural body.
-   - or an **extension** under `extensions/<short-name>.ts` — for anything that needs to register a real Pi tool or hook into Mineflayer events.
-3. Commit the new file with a clear message. The repo is on `main`. Don't push without operator confirmation.
+   - a **skill** under `./skills/<short-name>.md` — markdown, with a frontmatter header (`name`, `description`, `when_to_use`) and a procedural body.
+   - or an **extension** under `./extensions/<short-name>.ts` — for anything that needs to register a real Pi tool or hook into Mineflayer events.
+3. Commit the new file with a clear message. The repo is on `main`. Don't push without human confirmation via the repo.
 4. Update `README.md`'s **Status** section as milestones land.
+
+### Artifact location — hard rule
+
+Everything you author lives **in this repo**, never in `~/.pi/` or any other user-global location. This is what makes the project shareable:
+
+- **Skills** → `./skills/<name>.md`. Not `~/.pi/skills/`. Not `~/.pi/agent/`.
+- **Extensions** → `./extensions/<name>.{ts,js}`. Not globally `npm install`-ed.
+- **Prompt templates** → `./prompts/<name>.md`. Not `~/.pi/prompts/`.
+- **Per-session learnings, world state, base coords, etc.** → `./state/<MC_HOST>/...`. Gitignored by default, but **lives inside the repo**.
+- **Pi project settings** → `./.pi/settings.json` (use `pi install -l <source>`, the `-l` makes it project-local). This file IS committed; without it a fresh clone can't reproduce your tool stack.
+
+If you need to use Pi's built-in `skill-creator` or similar global tools, that's fine — just make sure the *output* lands under `./skills/` in this repo.
+
+If something genuinely belongs in the user's global Pi config (a personal API key, a workflow only the human cares about), don't write it. Tell the human and let them decide.
 
 Skills you might want early on (good for any server):
 

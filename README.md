@@ -104,7 +104,7 @@ You can mix providers via `--provider openai --model gpt-5` at launch — cheape
 Pi has first-class support for three growth surfaces:
 
 - **`skills/`** — Markdown-defined capabilities Pi can invoke. The agent can `Write` new ones at runtime when it discovers a missing capability.
-- **`extensions/`** — TypeScript modules registering new tools, commands, or UI tweaks. Installed via `pi install npm:<pkg>` / `pi install git:<url>` or written in-tree.
+- **`extensions/`** — TypeScript modules registering new tools, commands, or UI tweaks. Installed project-locally via `pi install -l npm:<pkg>` / `pi install -l git:<url>`, or written in-tree.
 - **`prompts/`** — Reusable prompt templates. Useful for cron-driven tick prompts ("what should I do next minute?").
 
 The opening `AGENTS.md` instructs the agent to start by writing a `mineflayer-bridge` extension that can:
@@ -115,6 +115,14 @@ The opening `AGENTS.md` instructs the agent to start by writing a `mineflayer-br
 - expose `chat / move / dig / place / equip / attack` as Pi tools
 
 Everything beyond that — farming, exploration, base-building, player interaction, server-specific quirks — should emerge from the agent itself.
+
+### Everything in the repo
+
+A hard rule, mirrored in `AGENTS.md`: every artefact the agent produces **lives in this repo**, never in the user's `~/.pi/` directory. That includes skills, extensions, prompt templates, project Pi settings (`.pi/settings.json`), and per-server state (`state/<MC_HOST>/`).
+
+The point is reproducibility and **community growth**: a fresh `git clone` should bring along every skill any contributor has written. Pi's own built-in skills (`skill-creator`, `agent-browser`, etc.) stay user-global — the agent is allowed to *use* them, but anything it *authors* lands under `./skills/` or `./extensions/` here.
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the skill format and how to propose changes.
 
 ## Project layout
 
