@@ -246,6 +246,31 @@ in-process. The package is **not** a default dep — install it explicitly
 (`npm i prismarine-viewer`) before enabling. If missing, the runtime
 logs a warning and continues.
 
+### Social layer (Phase 5)
+
+Inbound MC chat is classified via `runtime/social/intent.js` into one
+of `GREETING` / `STATUS_QUESTION` / `ADDRESSED_BANTER` / `COMMAND_LIKE`
+/ `UNSAFE_REQUEST` / `AMBIENT`. The classifier uses Unicode-aware
+boundaries so "Привет всем" lands as `GREETING` while
+"build me a tower" stays `AMBIENT` until the bot is addressed.
+
+`runtime/social/reply.js` turns an intent into a short reply:
+- `GREETING` → one of a small picked-randomly set ("yo" / "привет" / …).
+- `STATUS_QUESTION` → live snapshot summary: active skill, current
+  milestone, hp/food/position, no-progress reason, last diary line.
+- `COMMAND_LIKE` → dialog-only notice (per Phase 0).
+- `UNSAFE_REQUEST` → terse "logged for operator review", plus an entry
+  in `state/<host>/escalations.jsonl`.
+- `ADDRESSED_BANTER` → templates can't reliably answer, so the
+  generator returns `escalate: true`. Today bot.js does NOT spawn Pi
+  from this path (keeps the LLM out of the hot path); a rate-limited
+  escalation lands in Phase 6.
+
+`runtime/social/memory.js` maintains an LRU per-speaker buffer of
+recent lines (default 8 per speaker, 16 speakers max) and redacts
+password / api-key / JWT-shaped tokens before they ever exit the
+runtime.
+
 ## In-game chat (dialog-only)
 
 As of the Phase 0 survival-bot pivot, MC chat does **not** drive bot
