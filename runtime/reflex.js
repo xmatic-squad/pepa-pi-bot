@@ -7,7 +7,22 @@
 // escalates to Pi after a threshold (see ESCALATE_AFTER_NOOPS).
 
 import { info, warn } from "./log.js";
-import { attackNearest, fleeFrom, eatBestFood, sleepInBed, goTo, chopNearestTree, wander } from "./actions.js";
+import {
+	attackNearest,
+	fleeFrom,
+	eatBestFood,
+	sleepInBed,
+	goTo,
+	chopNearestTree,
+	wander,
+	craftPlanks,
+	craftSticks,
+	placeCraftingTable,
+	craftWoodenAxe,
+	craftWoodenPickaxe,
+	craftWoodenSword,
+	inv,
+} from "./actions.js";
 
 const REFLEX_LOG = "reflex";
 
@@ -194,6 +209,80 @@ function autonomousReflex(ctx) {
 	return { action: "dispatched", kind: "autonomous-wander", label: "wander" };
 }
 
+// ---- tech-tree progression -------------------------------------------------
+//
+// Scripted progression toward the long-term goal (small farm + village). Runs
+// between the autonomous wood-gathering reflex and idle. Order:
+//   1. have ≥4 logs but 0 planks  → craft planks
+//   2. have ≥2 planks but 0 sticks → craft sticks
+//   3. have planks+sticks but no axe → craft wooden_axe (places a table)
+//   4. have axe but no pickaxe → craft wooden_pickaxe
+//   5. have pickaxe but no sword → craft wooden_sword
+//   6. tools done — fall through to autonomous (chop more, then mine stone)
+//
+// Each step is cheap and idempotent: if it can't act it returns noop.
+
+const TECH_TREE_COOLDOWN_MS = 5_000;
+
+function techTreeReflex(ctx) {
+	const s = ctx.snapshot;
+	if (!s.connected) return { action: "noop" };
+	if (!ctx.bot) return { action: "noop" };
+
+	const since = Date.now() - (ctx.lastTechTreeAt ?? 0);
+	if (since < TECH_TREE_COOLDOWN_MS) return { action: "noop" };
+
+	const logs = inv.getAnyLogCount(ctx.bot);
+	const planks = inv.getAnyPlanksCount(ctx.bot);
+	const sticks = inv.getItemCount(ctx.bot, "stick");
+	const hasAxe = ["wooden_axe", "stone_axe", "iron_axe", "diamond_axe", "netherite_axe"].some(
+		(n) => inv.getItemCount(ctx.bot, n) > 0,
+	);
+	const hasPickaxe = [
+		"wooden_pickaxe",
+		"stone_pickaxe",
+		"iron_pickaxe",
+		"diamond_pickaxe",
+		"netherite_pickaxe",
+	].some((n) => inv.getItemCount(ctx.bot, n) > 0);
+	const hasSword = ["wooden_sword", "stone_sword", "iron_sword", "diamond_sword", "netherite_sword"].some(
+		(n) => inv.getItemCount(ctx.bot, n) > 0,
+	);
+
+	// Step 1: planks
+	if (logs >= 1 && planks < 4) {
+		ctx.lastTechTreeAt = Date.now();
+		ctx.dispatch(() => craftPlanks(ctx.bot, 4), "craft planks");
+		return { action: "dispatched", kind: "tech-planks", label: `planks (have ${planks}/4)` };
+	}
+	// Step 2: sticks
+	if (planks >= 2 && sticks < 4) {
+		ctx.lastTechTreeAt = Date.now();
+		ctx.dispatch(() => craftSticks(ctx.bot, 4), "craft sticks");
+		return { action: "dispatched", kind: "tech-sticks", label: `sticks (have ${sticks}/4)` };
+	}
+	// Step 3: axe
+	if (planks >= 3 && sticks >= 2 && !hasAxe) {
+		ctx.lastTechTreeAt = Date.now();
+		ctx.dispatch(() => craftWoodenAxe(ctx.bot), "craft wooden_axe");
+		return { action: "dispatched", kind: "tech-axe", label: "wooden_axe" };
+	}
+	// Step 4: pickaxe
+	if (planks >= 3 && sticks >= 2 && hasAxe && !hasPickaxe) {
+		ctx.lastTechTreeAt = Date.now();
+		ctx.dispatch(() => craftWoodenPickaxe(ctx.bot), "craft wooden_pickaxe");
+		return { action: "dispatched", kind: "tech-pickaxe", label: "wooden_pickaxe" };
+	}
+	// Step 5: sword
+	if (planks >= 2 && sticks >= 1 && hasAxe && hasPickaxe && !hasSword) {
+		ctx.lastTechTreeAt = Date.now();
+		ctx.dispatch(() => craftWoodenSword(ctx.bot), "craft wooden_sword");
+		return { action: "dispatched", kind: "tech-sword", label: "wooden_sword" };
+	}
+
+	return { action: "noop" };
+}
+
 // ---- idle ------------------------------------------------------------------
 
 function idleReflex(ctx) {
@@ -213,6 +302,7 @@ const REFLEXES = [
 	{ name: "defend", fn: defendReflex },
 	{ name: "eat", fn: eatReflex },
 	{ name: "sleep", fn: sleepReflex },
+	{ name: "tech-tree", fn: techTreeReflex },
 	{ name: "autonomous", fn: autonomousReflex },
 	{ name: "idle", fn: idleReflex },
 ];
