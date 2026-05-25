@@ -148,6 +148,20 @@ export function attachPluginsAndInit(bot) {
     bot.loadPlugin(pvp);
     bot.loadPlugin(collectblock);
     bot.loadPlugin(armorManager);
+
+    // Shim bot.modes — Mindcraft's skills.* call bot.modes.pause('cowardice')
+    // etc., but `mineflayer-modes` doesn't exist on npm (it's internal to
+    // Mindcraft). Stub the API so skills.stay()/.consume()/.defendSelf() etc.
+    // don't crash with "pause undefined".
+    if (!bot.modes) {
+        bot.modes = {
+            pause: () => {},
+            unpause: () => {},
+            isOn: () => false,
+            getMiningCooldown: () => 0,
+        };
+    }
+
     bot.once('login', () => {
         mc_version = bot.version;
         mcdata = minecraftData(mc_version);

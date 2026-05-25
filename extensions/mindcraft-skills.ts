@@ -268,14 +268,45 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		async execute(_id, params: { blockType: string; count?: number }) {
 			const bot = getBot();
 			const count = Math.max(1, Math.min(64, Math.floor(params.count ?? 1)));
-			// Timeout scales with count: ~30s per block plus 30s overhead.
-			// Allows count=8 (about 4 min) without hanging forever on
-			// pathfinder-unreachable cases.
-			const timeoutMs = Math.min(600_000, 30_000 + count * 30_000);
-			const ok = await safeCall("collectBlock", () =>
-				withTimeout(skills.collectBlock(bot, params.blockType, count), timeoutMs, `collectBlock(${params.blockType}, ${count})`),
+			// Bulk collection in dense terrain reliably times out on the
+			// upstream mineflayer-collectblock plugin (observed live: count=1
+			// works in ~25s, count=8 hangs past 270s with the same blocks
+			// in range). Loop single-block collects instead — each iteration
+			// re-pathfinds from the bot's current position, which is robust
+			// to the block-cache and pathfinder drift problems that cause
+			// the hangs. Per-iter timeout 75s.
+			let collected = 0;
+			let consecutiveFails = 0;
+			const errors: string[] = [];
+			for (let i = 0; i < count; i++) {
+				try {
+					const ok = await withTimeout(
+						skills.collectBlock(bot, params.blockType, 1),
+						75_000,
+						`collectBlock(${params.blockType}) iter ${i + 1}/${count}`,
+					);
+					if (ok) {
+						collected++;
+						consecutiveFails = 0;
+					} else {
+						consecutiveFails++;
+						errors.push(`iter ${i + 1}: returned false`);
+					}
+				} catch (e: any) {
+					consecutiveFails++;
+					errors.push(`iter ${i + 1}: ${e?.message ?? String(e)}`);
+				}
+				if (consecutiveFails >= 3) {
+					return textResult(
+						`Collected ${collected}/${count} ${params.blockType}; aborted after 3 consecutive failures. Last errors: ${errors.slice(-3).join("; ")}`,
+						{ collected, requested: count, errors: errors.slice(-3) },
+					);
+				}
+			}
+			return textResult(
+				`Collected ${collected}/${count} ${params.blockType}${errors.length ? ` (${errors.length} iters failed but recovered)` : ""}.`,
+				{ collected, requested: count, errors },
 			);
-			return textResult(ok ? `Collected ${count} of ${params.blockType}.` : `collectBlock returned false for ${params.blockType}.`, { ok, blockType: params.blockType, count });
 		},
 	});
 
