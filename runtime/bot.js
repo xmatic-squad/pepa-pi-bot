@@ -44,6 +44,8 @@ import { nextMilestone as nextCurriculumMilestone } from "./curriculum.js";
 import { classifyIntent, INTENTS } from "./social/intent.js";
 import { generateReply } from "./social/reply.js";
 import { createChatMemory } from "./social/memory.js";
+import { createStuckIncidentDetector } from "./stuck-incident.js";
+import { createSkillMetrics } from "./skill-metrics.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -68,6 +70,8 @@ let lastEscalationAt = 0;
 // future Telegram/diary surfaces) can answer "what is the bot doing and why
 // isn't it doing more?" without parsing the log stream.
 const noProgress = createNoProgressDetector();
+const stuckIncident = createStuckIncidentDetector();
+const skillMetrics = createSkillMetrics();
 let lastResult = null; // { label, ok, code, detail, ts }
 let lastFailureAt = 0;
 let lastPlanReadAt = 0;
@@ -177,6 +181,7 @@ function dispatchAction(fn, label, opts = {}) {
 				detail: res?.detail,
 				ts: Date.now(),
 			};
+			skillMetrics.record(label, ok);
 			if (!ok) {
 				lastFailureAt = lastResult.ts;
 				recordFailure(label, res?.detail);
@@ -202,6 +207,7 @@ function dispatchAction(fn, label, opts = {}) {
 				detail: String(e?.message ?? e),
 				ts: Date.now(),
 			};
+			skillMetrics.record(label, false);
 			lastFailureAt = lastResult.ts;
 			recordFailure(label, String(e?.message ?? e));
 		})
@@ -604,10 +610,37 @@ function tick() {
 		lastSnapshot.lastResult = lastResult;
 		lastSnapshot.noProgressReason = noProgressReason;
 		lastSnapshot.failuresByCode = failuresByCode();
+		lastSnapshot.skillMetrics = skillMetrics.snapshot();
 		lastSnapshot.lastEscalation = lastEscalationAt
 			? { ts: lastEscalationAt, ageMs: now - lastEscalationAt }
 			: null;
 		lastSnapshot.reflexPaused = reflexPaused;
+
+		// Stuck-incident detector: file a structured proposal when the same
+		// no-progress reason persists past the threshold. Kept separate from
+		// the existing bug-class failure tracker — they target different
+		// classes of breakage. The detector enforces its own cooldown so we
+		// don't spam the proposals dir.
+		const stuck = stuckIncident.check({
+			snapshot: lastSnapshot,
+			lastResult,
+			metrics: lastSnapshot.skillMetrics,
+			now,
+		});
+		if (stuck?.fire) {
+			try {
+				const { filename } = writeProposal({
+					kind: stuck.kind,
+					summary: stuck.summary,
+					body: stuck.body,
+					editScope: stuck.editScope,
+				});
+				warn("stuck", `filed ${filename}: ${stuck.summary}`);
+				appendDiary(`stuck-proposal filed: ${filename} (${stuck.summary})`);
+			} catch (e) {
+				warn("stuck", `writeProposal failed: ${e.message}`);
+			}
+		}
 
 		ipc?.broadcast(EVENT_TYPES.STATUS, lastSnapshot);
 	} else {
