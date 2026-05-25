@@ -1,17 +1,19 @@
 # pepa-pi-bot
 
-> An autonomous self-extending Minecraft player, powered by [Pi](https://pi.dev) and the [Mineflayer](https://github.com/PrismarineJS/mineflayer) protocol stack. Built for the [pepa](https://mc.xmatic.team) survival server.
+> A universal, autonomous, self-extending Minecraft player. Powered by [Pi](https://pi.dev) and the [Mineflayer](https://github.com/PrismarineJS/mineflayer) protocol stack. Works against **any** Minecraft Java server — vanilla, Paper, Spigot, Fabric, Forge, online-mode or cracked, modded or vanilla.
 
-The bot is **not a finished application**. It is a seed: a Pi agent with an initial mandate and a hand-off to a Minecraft server. From there, the agent is expected to grow its own toolset — writing new skills, fetching extensions, and adapting its behaviour as it plays.
+The bot is **not a finished application**. It is a seed: a Pi agent with an initial mandate and a hand-off to whatever Minecraft server you point it at. From there, the agent is expected to grow its own toolset — writing new skills, fetching extensions, and adapting its behaviour as it plays.
+
+The name `pepa-pi-bot` is just the project's name (`pepa` from the original test server, `pi` from the runtime). The bot itself is server-agnostic.
 
 ## Concept
 
-Most Minecraft AI bots ship as monolithic projects: hard-coded actions, fixed prompts, a single LLM provider. This repo flips that around.
+Most Minecraft AI bots ship as monolithic projects: hard-coded actions, fixed prompts, a single LLM provider, sometimes a single target server. This repo flips that around.
 
 ```
 ┌───────────────────────────────────────────────┐
 │  Pi (terminal agent, model-agnostic)          │
-│  ├── AGENTS.md   ← initial mandate            │
+│  ├── AGENTS.md   ← generic mandate            │
 │  ├── skills/     ← grown over time            │
 │  └── extensions/ ← TS plugins, also grown     │
 └───────────────┬───────────────────────────────┘
@@ -25,8 +27,8 @@ Most Minecraft AI bots ship as monolithic projects: hard-coded actions, fixed pr
                 │ TCP 25565
                 ▼
 ┌───────────────────────────────────────────────┐
-│  pepa Minecraft server                        │
-│  Paper 26.1.2 · cracked · AuthMe · BlueMap    │
+│  ANY Minecraft Java server                    │
+│  configured via .env (host, port, auth, ...)  │
 └───────────────────────────────────────────────┘
 ```
 
@@ -38,11 +40,11 @@ The Pi agent is the brain. Mineflayer is the body. The bridge between them — t
 |---|---|---|
 | **Pi** ≥ `0.75` | The agent runtime. Reads `AGENTS.md`, loads skills, calls the LLM. | `curl -fsSL https://pi.dev/install.sh \| sh` |
 | **Node.js** ≥ `20` | Required by Pi and by Mineflayer. | `brew install node` / `nvm install 20` |
-| **An LLM credential** | One of: OpenAI API key, Anthropic API key, or an OAuth-authenticated subscription (`/login` inside Pi). ChatGPT Pro / Claude Max work via OAuth on supported providers. | See [Authentication](#authentication) |
-| **A Minecraft account or cracked nick** | The bot joins as a real player. The pepa server runs in cracked mode, so any nickname works. | — |
-| **Network access to the MC server** | Direct TCP to `host:25565`. | — |
+| **An LLM credential** | One of: OpenAI / Anthropic / Google API key, or an OAuth-authenticated subscription (`/login` inside Pi). ChatGPT Pro and Claude Max work via OAuth on supported providers. | See [Authentication](#authentication) |
+| **Access to some Minecraft server** | The bot joins as a real player. Cracked or premium, online-mode or offline, doesn't matter — configure it in `.env`. | — |
+| **Network access to that server** | Direct TCP to `host:port`. | — |
 
-> The bot does **not** need its own Minecraft client install, server access, RCON, or any special server-side plugin. It joins as a vanilla player over the standard protocol.
+> The bot does **not** need its own Minecraft client install, server admin access, RCON, or any server-side plugin. It joins as a vanilla player over the standard protocol.
 
 ## Quickstart
 
@@ -51,9 +53,9 @@ The Pi agent is the brain. Mineflayer is the body. The bridge between them — t
 git clone git@github.com:xmatic-squad/pepa-pi-bot.git
 cd pepa-pi-bot
 
-# 2. Configure credentials
+# 2. Configure for your target server
 cp .env.example .env
-$EDITOR .env          # fill in MC_HOST, MC_USERNAME, AuthMe password, LLM provider, etc.
+$EDITOR .env          # set MC_HOST, MC_USERNAME, auth mode, LLM provider, etc.
 
 # 3. Install Node deps (mineflayer + dotenv to start)
 npm install
@@ -69,18 +71,23 @@ export ANTHROPIC_API_KEY=sk-ant-...
 pi
 ```
 
-On first launch Pi loads `AGENTS.md` from the project root. That file is the seed prompt — it tells the agent who it is, what server it should join, and that it is expected to extend itself.
+On first launch Pi loads `AGENTS.md` from the project root. That file is the seed prompt — it tells the agent it is a Minecraft player, where to find its configuration, and that it is expected to extend itself.
 
 Sessions persist by default. Use `pi -c` to resume the last conversation.
 
 ## Authentication
 
-Pi supports **15+ LLM providers** and two credential modes:
+Two dimensions:
 
-1. **OAuth subscription login** — `pi` then `/login` inside the TUI. Suitable for ChatGPT Plus/Pro, Claude Max, and other subscriptions that ship an OAuth flow. No metered API billing.
-2. **API key environment variables** — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, etc. Metered, but no UI.
+**1. Minecraft auth.** Configured in `.env` via `MC_AUTH_MODE`:
+- `offline` — cracked servers. Any nickname works. No external auth call.
+- `microsoft` — premium / online-mode servers. Mineflayer handles the device-code flow on first connect and caches the token in `~/.minecraft-auth/`.
 
-You can mix providers via `--provider openai --model gpt-5` at launch. Cheaper models for idle ticks, smarter ones for hard decisions.
+**2. LLM auth.** Pi supports **15+ providers** and two credential modes:
+- **OAuth subscription login** — `pi` then `/login` inside the TUI. Suitable for ChatGPT Plus/Pro, Claude Max, and other subscriptions that ship an OAuth flow. No metered API billing.
+- **API key environment variables** — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, etc. Metered, but no UI prompt.
+
+You can mix providers via `--provider openai --model gpt-5` at launch — cheaper models for idle ticks, smarter ones for hard decisions.
 
 ## How the agent extends itself
 
@@ -91,12 +98,13 @@ Pi has first-class support for three growth surfaces:
 - **`prompts/`** — Reusable prompt templates. Useful for cron-driven tick prompts ("what should I do next minute?").
 
 The opening `AGENTS.md` instructs the agent to start by writing a `mineflayer-bridge` extension that can:
-- connect to the configured MC server
-- register with AuthMe
+- connect to the configured MC server (any host/port/version)
+- handle the configured auth mode (offline or microsoft)
+- if a login plugin like AuthMe is present, perform `/register` and `/login` from a password supplied in `.env`
 - emit world events back into the agent loop
 - expose `chat / move / dig / place / equip / attack` as Pi tools
 
-Everything beyond that — farming, exploration, base-building, player interaction — should emerge from the agent itself.
+Everything beyond that — farming, exploration, base-building, player interaction, server-specific quirks — should emerge from the agent itself.
 
 ## Project layout
 
@@ -117,17 +125,20 @@ pepa-pi-bot/
 
 ## Safety boundaries
 
-The pepa server is a shared survival world. The agent **must not**:
-- be given OP rights on the server
-- destroy player-built structures without explicit human request
-- spam chat
-- exfiltrate the AuthMe password or any other secret into chat / world / web
+Server-agnostic but with hard defaults the agent must respect on any server it joins:
 
-These rules are mirrored in `AGENTS.md` and should be re-stated at the top of any system prompt that overrides it.
+- **Never request OP / admin rights** in chat.
+- **Never break or modify other players' builds** without explicit human request.
+- **Never spam chat** — built-in rate limit (`CHAT_RATE_LIMIT_PER_MIN` in `.env`).
+- **Never leak secrets** from `.env` (auth passwords, API keys) into chat, world signs, books, commits, or web fetches.
+- **No destructive bash** in the repo (`rm -rf`, force pushes) without operator confirmation.
+- **Stop and wait** if kicked or banned — do not auto-reconnect indefinitely.
+
+These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt that overrides it.
 
 ## Status
 
-🌱 **Seedling.** The repo currently ships only the scaffold and the initial mandate. The first real milestone is: agent connects, registers via AuthMe, sends `hello` in chat, writes its first skill (`logout-on-shutdown`). Everything past that emerges from interaction.
+🌱 **Seedling.** The repo currently ships only the scaffold and the initial mandate. The first real milestone is: agent connects to the server configured in `.env`, handles whatever login flow that server requires, and sends `hello` in chat. Everything past that emerges from interaction.
 
 ## License
 

@@ -7,10 +7,10 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Operator                                                   │
-│  (timmy / halofourteen — in-game chat, repo edits, .env)    │
+│  (human — in-game chat, repo edits, .env)                   │
 └─────┬────────────────────────────────────────────┬──────────┘
       │                                            │
-      │ chat / edit AGENTS.md                       │ optional: Telegram (future)
+      │ chat / edit AGENTS.md                      │ optional: Telegram (future)
       ▼                                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Pi runtime                                                 │
@@ -25,14 +25,15 @@
 │  - holds a single bot client                                │
 │  - exposes mc_chat / mc_position / mc_dig / ... as tools    │
 │  - pushes world events into the agent loop                  │
+│  - reads MC_HOST/PORT/AUTH_MODE/USERNAME from .env          │
 └────────────────────┬────────────────────────────────────────┘
-                     │ TCP 25565
+                     │ TCP 25565 (or whatever .env says)
                      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  pepa Paper server                                          │
-│  - AuthMe gates login                                       │
-│  - BlueMap renders the world                                │
-│  - host: play.xmatic.team                                   │
+│  Any Minecraft Java server                                  │
+│  - vanilla / Paper / Spigot / Fabric / Forge                │
+│  - online-mode or offline                                   │
+│  - with or without login plugins (AuthMe, nLogin, ...)      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -45,23 +46,26 @@
 
 ## Why Mineflayer as the body
 
-- **Version coverage.** Supports MC 1.8 → 1.21.x with auto-detect; the pepa server (Paper 26.1.2) sits inside that range.
+- **Version coverage.** Supports MC 1.8 → 1.21.x with auto-detect.
+- **Auth coverage.** `offline` for cracked, `microsoft` for premium — same API, switched via one config value.
 - **High-level API.** No need to hand-roll the Minecraft protocol. Movement, pathfinding (via `mineflayer-pathfinder`), inventory, and chat are first-class.
-- **Cracked-friendly.** `auth: 'offline'` works against AuthMe-gated servers without a Microsoft account.
+- **Plugin ecosystem.** `mineflayer-pathfinder`, `mineflayer-pvp`, `mineflayer-collectblock`, etc. — usable as extensions when the agent decides it needs them.
 
 ## What's intentionally absent (for now)
 
-- **MCP server.** A separate MCP server could expose the same tools to Claude Desktop or other clients. Out of scope until there's a concrete need for a second consumer.
+- **MCP server.** A separate MCP server could expose the same tools to Claude Desktop or other clients. Out of scope until there's a concrete second consumer.
 - **Telegram bridge.** Two-way ops chat over Telegram is a planned future skill. The `.env.example` reserves the env vars but the wiring is not built.
 - **Long-term memory.** The agent will rely on Pi sessions + this repo for now. If/when context-window growth becomes painful, a vector store will be added as a skill.
 - **Sandboxing.** The agent currently has full shell access in the repo dir. We rely on the safety rules in `AGENTS.md` plus the safety boundary that the bot has no OP rights server-side.
+- **Hard-coded server identity.** Deliberately. The same checkout can be re-pointed at a different server by editing `.env` and restarting Pi.
 
 ## Deployment
 
-Local dev for now. Once the seed loop is stable, the same repo will be deployed as a `compose` service on the pepa VPS itself (8 GB RAM is enough to run the MC server + a Pi process + Mineflayer). No code changes expected — everything is read from `.env`.
+Local dev for now. Once the seed loop is stable on at least one target server, the same repo can be deployed as a `compose` service anywhere — VPS, home server, Pi (the hardware), whatever. No code changes expected — everything is read from `.env`.
 
 ## Open questions
 
 - Does Pi's OAuth flow currently support ChatGPT Pro? Codex CLI does, but it's not documented for Pi. **Action**: try `pi /login` and observe.
 - How are extensions loaded long-term — `pi install -e ./extensions/mineflayer-bridge.ts`, or via `--extension` flag, or by adding to settings? **Action**: read pi.dev/docs/latest's Extensions section before writing the bridge.
 - What's the right tick cadence? 60s is a guess. Probably needs to be event-driven (react to chat/world events) rather than purely cron.
+- How does the agent best persist *cross-server* learnings (e.g. "I know how to handle AuthMe") vs *per-server* state (e.g. "on server X my base is at 100,64,-200")? Likely: skills are cross-server, `state/<host>/` directory holds per-server data.
