@@ -10,7 +10,7 @@ The agent has a working Mineflayer bridge, joins the configured server, handles 
 
 Captured in: `skills/server-onboarding.md`.
 
-## Phase 1 — Presence 🌿
+## Phase 1 — Presence 🌳
 
 The bot is **on the server, all the time** (except for a clean human-issued disconnect), and is **conversational**:
 
@@ -53,7 +53,7 @@ Two-way ops channel without sitting in Pi TUI:
 
 `.env` placeholders for `TELEGRAM_BOT_TOKEN` and `TELEGRAM_OPERATOR_CHAT_ID` already exist.
 
-## Phase 5 — Self-extension as default 🌱
+## Phase 5 — Self-extension as default 🌿
 
 By this phase the patterns above should produce a reflex:
 
@@ -63,7 +63,7 @@ By this phase the patterns above should produce a reflex:
 
 The first successful "I'll try to learn" cycle that ships a useful skill marks Phase 5 as 🌳.
 
-## Phase 6 — Escalation log 🌱
+## Phase 6 — Escalation log 🌳
 
 When a request smells destructive, ambiguous, or off-policy (e.g. break a player's blocks, leave a structure, give someone an item from inventory, leave the server entirely), the bot doesn't unilaterally do it and doesn't flatly refuse. Instead:
 
