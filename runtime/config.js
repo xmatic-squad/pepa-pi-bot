@@ -44,6 +44,11 @@ export const config = Object.freeze({
 		.filter(Boolean),
 	tickIntervalMs: Math.max(1, Number.parseInt(opt("TICK_INTERVAL_SECONDS", "3"), 10)) * 1000,
 	chatRateLimitPerMin: Number.parseInt(opt("CHAT_RATE_LIMIT_PER_MIN", "15"), 10),
+	// Optional prismarine-viewer port for local visual debugging. 0/empty = off.
+	viewerPort: (() => {
+		const v = Number.parseInt(opt("VIEWER_PORT", "0"), 10);
+		return Number.isFinite(v) && v > 0 ? v : 0;
+	})(),
 });
 
 export const serverKey = `${host}_${port}`;

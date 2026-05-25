@@ -100,8 +100,26 @@ function reducer(state: State, action: Action): State {
 	}
 }
 
+const STATE_COLOR: Record<string, string> = {
+	emergency: "red",
+	working: "cyan",
+	recovering: "yellow",
+	planning: "magenta",
+	social: "blue",
+	idle: "gray",
+};
+
 function StatusBar({ snapshot, paused, connectedToBot }: { snapshot: Snapshot; paused: boolean; connectedToBot: boolean }) {
 	const tone = snapshot.connected ? "green" : "red";
+	const stateName: string = snapshot.runtimeState ?? "?";
+	const stateColor = STATE_COLOR[stateName] ?? "white";
+	const reason: string | null = snapshot.noProgressReason ?? null;
+	const lastResult: any = snapshot.lastResult ?? null;
+	const milestone: string | null = snapshot.currentMilestone ?? null;
+	const failuresByCode: Record<string, number> = snapshot.failuresByCode ?? {};
+	const failuresStr = Object.entries(failuresByCode)
+		.map(([k, v]) => `${k}:${v}`)
+		.join(" ");
 	return (
 		<Box borderStyle="round" borderColor={tone} flexDirection="column" paddingX={1}>
 			<Text>
@@ -112,6 +130,10 @@ function StatusBar({ snapshot, paused, connectedToBot }: { snapshot: Snapshot; p
 				<Text color={connectedToBot ? "green" : "red"}>{connectedToBot ? "IPC ok" : "IPC down"}</Text>
 				{"   "}
 				{paused ? <Text color="yellow">⏸ reflex paused</Text> : <Text color="green">▶ reflex live</Text>}
+				{"   "}
+				<Text color={stateColor} bold>
+					state={stateName}
+				</Text>
 			</Text>
 			<Text>
 				user={snapshot.username ?? "?"} hp={snapshot.health ?? "?"} food={snapshot.food ?? "?"}{" "}
@@ -125,17 +147,43 @@ function StatusBar({ snapshot, paused, connectedToBot }: { snapshot: Snapshot; p
 			</Text>
 			<Text>
 				{snapshot.busy ? (
-					<Text color="cyan">▸ busy: {snapshot.busy.label}</Text>
-				) : snapshot.lastReflex ? (
+					<Text color="cyan">▸ skill: {snapshot.busy.label}</Text>
+				) : snapshot.activeSkill ? (
 					<Text dimColor>
-						last reflex: {snapshot.lastReflex.name}
-						{snapshot.lastReflex.label ? ` (${snapshot.lastReflex.label})` : ""}{" "}
-						{snapshot.lastReflex.ts ? formatAge(snapshot.lastReflex.ts) : ""}
+						last skill: {snapshot.activeSkill}
+						{snapshot.lastReflex?.ts ? ` (${formatAge(snapshot.lastReflex.ts)})` : ""}
 					</Text>
 				) : (
-					<Text dimColor>no reflex action yet</Text>
+					<Text dimColor>no skill yet</Text>
 				)}
 			</Text>
+			<Text>
+				<Text dimColor>milestone: </Text>
+				<Text>{milestone ?? <Text dimColor>(none — planner_empty?)</Text>}</Text>
+			</Text>
+			{reason ? (
+				<Text>
+					<Text color="yellow" bold>
+						▲ no-progress:
+					</Text>{" "}
+					<Text color="yellow">{reason}</Text>
+				</Text>
+			) : null}
+			{lastResult ? (
+				<Text>
+					<Text dimColor>last result: </Text>
+					<Text color={lastResult.ok ? "green" : "red"}>
+						{lastResult.label} → {lastResult.code ?? (lastResult.ok ? "ok" : "fail")}
+					</Text>
+					<Text dimColor>{lastResult.ts ? `  ${formatAge(lastResult.ts)}` : ""}</Text>
+				</Text>
+			) : null}
+			{failuresStr ? (
+				<Text dimColor>failures by class: {failuresStr}</Text>
+			) : null}
+			{snapshot.lastEscalation?.ts ? (
+				<Text dimColor>last Pi escalation: {formatAge(snapshot.lastEscalation.ts)}</Text>
+			) : null}
 		</Box>
 	);
 }

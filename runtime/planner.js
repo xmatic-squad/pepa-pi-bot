@@ -170,3 +170,30 @@ export function stopPlanner() {
 export function readCurrentPlan() {
 	return readOr(PLAN_PATH);
 }
+
+export function isPlannerBusy() {
+	return planInFlight;
+}
+
+// Returns the first uncompleted milestone in plan.md (a line that starts
+// with a list marker but is NOT preceded by "✓ "), or null if the plan is
+// empty or every milestone is done. Plain text, leading list markers
+// stripped, capped at 200 chars to keep it TUI-friendly.
+export function readNextMilestone() {
+	const text = readOr(PLAN_PATH);
+	if (!text.trim()) return null;
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		if (!line) continue;
+		const m = line.match(/^(?:[-*]|\d+[.)])\s+(.*)$/);
+		if (!m) continue;
+		const content = m[1];
+		if (content.startsWith("✓ ") || content.startsWith("[x] ") || content.startsWith("[X] ")) continue;
+		return content.slice(0, 200);
+	}
+	return null;
+}
+
+export function planExists() {
+	return readOr(PLAN_PATH).trim().length > 0;
+}
