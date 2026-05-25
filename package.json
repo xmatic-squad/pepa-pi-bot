@@ -1,0 +1,27 @@
+{
+  "name": "pepa-pi-bot",
+  "version": "0.0.1",
+  "private": true,
+  "description": "An autonomous, self-extending Minecraft player powered by Pi and Mineflayer.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "agent": "pi",
+    "agent:resume": "pi -c"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "mineflayer": "^4.37.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xmatic-squad/pepa-pi-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/xmatic-squad/pepa-pi-bot/issues"
+  },
+  "homepage": "https://github.com/xmatic-squad/pepa-pi-bot#readme"
+}

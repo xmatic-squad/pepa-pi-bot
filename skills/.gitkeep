@@ -1,0 +1,3 @@
+# Skills grown by the agent live here.
+# Format: markdown files with `name`, `description`, `when_to_use` frontmatter.
+# See AGENTS.md for the growth loop.
