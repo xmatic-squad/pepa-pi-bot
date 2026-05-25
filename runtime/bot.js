@@ -20,6 +20,16 @@ import { runTick } from "./reflex.js";
 import { createIpcServer } from "./ipc-server.js";
 import { askPi } from "./pi-bridge.js";
 import { COMMAND_TYPES, EVENT_TYPES } from "./ipc-protocol.js";
+import {
+	readCurrentTask,
+	writeCurrentTask,
+	clearCurrentTask,
+	appendDiary,
+	writeProposal,
+	listProposals,
+	readProposal,
+	approveProposal,
+} from "./state-store.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -50,6 +60,8 @@ const reflexCtx = {
 	idleCounter: 0,
 	lastEatAt: 0,
 	lastSleepAttemptAt: 0,
+	// Tracks repeated failure of the same labelled action — triggers a proposal.
+	recentFailures: [], // [{label, detail, ts}], capped at 10
 	dispatch: dispatchAction,
 	clearOperatorGoal: () => {
 		reflexCtx.operatorGoal = null;
@@ -124,11 +136,20 @@ function dispatchAction(fn, label, opts = {}) {
 	}
 	reflexCtx.busy = true;
 	reflexCtx.currentActionLabel = label;
+	writeCurrentTask({ label, status: "in_progress", snapshot: lastSnapshot });
 	info("dispatch", `→ ${label}`);
 	Promise.resolve()
 		.then(() => fn())
 		.then((res) => {
-			info("dispatch", `← ${label} ${res?.ok ? "ok" : "fail"}${res?.detail ? ` (${JSON.stringify(res.detail).slice(0, 80)})` : ""}`);
+			const ok = !!res?.ok;
+			info(
+				"dispatch",
+				`← ${label} ${ok ? "ok" : "fail"}${res?.detail ? ` (${JSON.stringify(res.detail).slice(0, 80)})` : ""}`,
+			);
+			writeCurrentTask({ label, status: ok ? "completed" : "failed", detail: res?.detail });
+			if (!ok) recordFailure(label, res?.detail);
+			else clearRecentFailures(label);
+
 			if (opts.onComplete) {
 				try {
 					opts.onComplete(res ?? { ok: false, detail: "no result" });
@@ -139,11 +160,77 @@ function dispatchAction(fn, label, opts = {}) {
 		})
 		.catch((e) => {
 			warn("dispatch", `${label} threw: ${e?.message ?? e}`);
+			writeCurrentTask({ label, status: "threw", detail: String(e?.message ?? e) });
+			recordFailure(label, String(e?.message ?? e));
 		})
 		.finally(() => {
 			reflexCtx.busy = false;
 			reflexCtx.currentActionLabel = null;
 		});
+}
+
+// ---- failure tracking + proposal detection --------------------------------
+
+const PROPOSAL_THRESHOLD = 3; // same labelled action fails 3+ times in a row
+let lastProposalAt = 0;
+const PROPOSAL_COOLDOWN_MS = 30 * 60 * 1000; // don't spam proposal files
+
+function recordFailure(label, detail) {
+	reflexCtx.recentFailures.push({ ts: Date.now(), label, detail });
+	if (reflexCtx.recentFailures.length > 10) reflexCtx.recentFailures.shift();
+	maybeFileProposal(label);
+}
+
+function clearRecentFailures(label) {
+	reflexCtx.recentFailures = reflexCtx.recentFailures.filter((f) => f.label !== label);
+}
+
+function maybeFileProposal(label) {
+	// Count consecutive trailing failures with the same label.
+	const trailing = [];
+	for (let i = reflexCtx.recentFailures.length - 1; i >= 0; i--) {
+		const f = reflexCtx.recentFailures[i];
+		if (f.label === label) trailing.push(f);
+		else break;
+	}
+	if (trailing.length < PROPOSAL_THRESHOLD) return;
+	if (Date.now() - lastProposalAt < PROPOSAL_COOLDOWN_MS) return;
+	lastProposalAt = Date.now();
+
+	const summary = `${label} failed ${trailing.length}× in a row`;
+	const body = [
+		`# Repeated failure: ${label}`,
+		"",
+		"## What happened",
+		"",
+		`The reflex layer dispatched \`${label}\` ${trailing.length} times in succession without a single success.`,
+		"",
+		"## Most recent failures",
+		"",
+		...trailing.slice(0, 5).map(
+			(f, i) => `${i + 1}. \`${new Date(f.ts).toISOString()}\` — ${JSON.stringify(f.detail).slice(0, 200)}`,
+		),
+		"",
+		"## Snapshot at moment of last failure",
+		"",
+		"```json",
+		JSON.stringify(lastSnapshot, null, 2),
+		"```",
+		"",
+		"## Suggested next step",
+		"",
+		"Operator: review whether the reflex should:",
+		"- back off (cooldown extension)",
+		"- switch to a different action variant",
+		"- escalate to Pi for situational reasoning",
+		"- or whether the underlying primitive in `runtime/actions.js` needs work.",
+		"",
+		`Approve this proposal (move to \`proposals/approved/\`) and run \`npm run propose:apply <filename>\` to delegate a patch attempt to Pi headless.`,
+	].join("\n");
+
+	const { filename } = writeProposal({ kind: `repeated-fail-${label}`, summary, body });
+	warn("proposal", `filed ${filename}: ${summary}`);
+	appendDiary(`proposal filed: ${filename} (${summary})`);
 }
 
 // ---- operator chat commands ------------------------------------------------
@@ -228,6 +315,7 @@ function connect() {
 
 	bot.once("spawn", () => {
 		info("mc", `spawned at ${JSON.stringify(bot.entity.position)}`);
+		appendDiary(`spawned at ${bot.entity.position.x.toFixed(0)},${bot.entity.position.y.toFixed(0)},${bot.entity.position.z.toFixed(0)}`);
 		ipc?.broadcast(EVENT_TYPES.STATUS, buildSnapshot(bot));
 	});
 
@@ -251,9 +339,11 @@ function connect() {
 	bot.on("death", () => {
 		const pos = bot.entity?.position;
 		warn("mc", `died at ${JSON.stringify(pos)}`);
+		appendDiary(`died at ${pos?.x.toFixed(0)},${pos?.y.toFixed(0)},${pos?.z.toFixed(0)}`);
 		ipc?.broadcast(EVENT_TYPES.DEATH, { reason: "unknown", position: pos });
 		// On death, drop any operator goal — they need to ask again.
 		reflexCtx.operatorGoal = null;
+		clearCurrentTask();
 	});
 
 	bot.on("kicked", (reason) => {
@@ -325,6 +415,7 @@ function tick() {
 	if (shuttingDown) return;
 	if (bot && bot.entity) {
 		lastSnapshot = buildSnapshot(bot);
+		lastSnapshot.pendingProposals = listProposals().length;
 		reflexCtx.snapshot = lastSnapshot;
 		if (!reflexPaused) {
 			const result = runTick(reflexCtx);
@@ -388,6 +479,32 @@ function handleCommand(msg, send) {
 		case COMMAND_TYPES.SNAPSHOT:
 			send(EVENT_TYPES.STATUS, lastSnapshot);
 			break;
+		case COMMAND_TYPES.PROPOSAL_LATEST: {
+			const all = listProposals();
+			if (all.length === 0) {
+				send(EVENT_TYPES.PROPOSAL, { filename: null, body: null, total: 0 });
+				return;
+			}
+			const filename = all[all.length - 1];
+			send(EVENT_TYPES.PROPOSAL, {
+				filename,
+				body: readProposal(filename),
+				total: all.length,
+			});
+			break;
+		}
+		case COMMAND_TYPES.PROPOSAL_APPROVE: {
+			const filename = msg.payload?.filename;
+			if (!filename) return;
+			try {
+				const dst = approveProposal(filename);
+				info("proposal", `approved ${filename} → ${dst}`);
+				appendDiary(`proposal approved: ${filename}`);
+			} catch (e) {
+				send(EVENT_TYPES.ERROR, { source: "proposal", text: e.message });
+			}
+			break;
+		}
 		default:
 			warn("ipc", `unknown command type: ${msg.type}`);
 	}
@@ -412,8 +529,27 @@ process.on("SIGINT", () => gracefulExit(0));
 process.on("SIGTERM", () => gracefulExit(0));
 
 info("runtime", `pepa runtime starting; cfg=${JSON.stringify(redactedConfig())}`);
+
+// Resume info: surface stale state across restarts. We don't auto-resume any
+// action — but we tell the operator if the bot died mid-task last time, and
+// the count of pending proposals.
+const lastTask = readCurrentTask();
+if (lastTask && lastTask.label) {
+	info("resume", `previous task: ${lastTask.label} (${lastTask.status ?? "?"}, ${lastTask.ts ?? "?"})`);
+	if (lastTask.status === "in_progress") {
+		warn("resume", `last shutdown happened mid-action — operator should review state/<host>/current-task.json`);
+	}
+}
+const pendingProposals = listProposals();
+if (pendingProposals.length > 0) {
+	warn("resume", `${pendingProposals.length} pending proposal(s) — see state/<host>/proposals/`);
+}
+
 ipc = createIpcServer({
-	getStatusSnapshot: () => lastSnapshot,
+	getStatusSnapshot: () => ({
+		...lastSnapshot,
+		pendingProposals: listProposals().length,
+	}),
 	onCommand: handleCommand,
 });
 connect();
