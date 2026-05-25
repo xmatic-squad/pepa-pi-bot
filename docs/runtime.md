@@ -204,11 +204,39 @@ Reference skills shipped today: `gather.logs`, `survive.eat`,
 `runtime/actions.js` primitives directly — porting more behaviours to
 skills lands in later phases.
 
-Run the contract + groups tests:
+Run the contract + groups + curriculum tests:
 
 ```bash
 npm test
 ```
+
+### Survival curriculum (Phase 3)
+
+`runtime/curriculum.js` exposes a deterministic early-game progression:
+
+```
+wood.16 → wood.planks-and-sticks → wood.tools →
+stone.32 → stone.tools → food.basic → storage.chest → shelter.torch
+```
+
+Each milestone has an `isDone(inventory, snapshot)` predicate and a
+`suggest(inventory, snapshot)` function that names the next skill to
+dispatch. `isDone` is stateful in the sense that reaching a later tier
+implies all earlier "gather" milestones are complete (so the bot
+doesn't loop back to "gather 16 logs" after crafting them into
+planks).
+
+The current curriculum result is on every snapshot as
+`snapshot.curriculum = { milestone, plan, inventoryFull }` so the TUI
+can show what the bot is working on and which skill should drive it.
+Wiring the scheduler to actually call `runSkill(plan.skillId, …)` in
+the reflex loop is a Phase 4 task; today the reflex still uses
+`actions.js` directly.
+
+Inventory pressure: `isInventoryFull(snapshot)` is exposed on every
+curriculum result; the TUI surfaces `[inventory full]` next to the
+milestone label so the operator can see when a deposit step is needed
+before progress continues.
 
 ### Optional: prismarine-viewer
 

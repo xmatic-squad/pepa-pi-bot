@@ -38,6 +38,7 @@ import { startPlanner, isPlannerBusy, readNextMilestone, planExists } from "./pl
 import { computeState, STATES } from "./state.js";
 import { createNoProgressDetector } from "./no-progress.js";
 import { maybeStartViewer } from "./viewer.js";
+import { nextMilestone as nextCurriculumMilestone } from "./curriculum.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -582,7 +583,14 @@ function tick() {
 		lastSnapshot.activeSkill = reflexCtx.busy
 			? reflexCtx.currentActionLabel
 			: reflexCtx.lastReflex?.label ?? null;
-		lastSnapshot.currentMilestone = cachedMilestone;
+		// Two sources of "next milestone":
+		//   - planner.md (LLM-written, free-form, advisory)
+		//   - curriculum.js (deterministic early-game progression)
+		// The TUI prefers the curriculum's structured milestone (it has a
+		// suggested skill); falls back to the planner line for late-game.
+		const curriculum = nextCurriculumMilestone(lastSnapshot);
+		lastSnapshot.curriculum = curriculum;
+		lastSnapshot.currentMilestone = curriculum?.milestone?.title ?? cachedMilestone;
 		lastSnapshot.lastResult = lastResult;
 		lastSnapshot.noProgressReason = noProgressReason;
 		lastSnapshot.failuresByCode = failuresByCode();
