@@ -5,10 +5,24 @@
 > the hybrid one under [`runtime/`](./runtime/) — a script-driven reflex loop
 > with Pi invoked only on demand. See [`docs/runtime.md`](./docs/runtime.md)
 > for the new architecture. The principles below still apply to both modes:
-> tool catalog, safety rules, operator-trust model, and memory protocol are
-> shared. When you (the agent, in Pi-only mode) propose new code, prefer
-> writing it as a reflex/action in `runtime/` over an extension in
-> `extensions/` — the hybrid runtime is where new work lands going forward.
+> tool catalog, safety rules, and memory protocol are shared. When you (the
+> agent, in Pi-only mode) propose new code, prefer writing it as a
+> reflex/action in `runtime/` over an extension in `extensions/` — the
+> hybrid runtime is where new work lands going forward.
+
+> **Product pivot (2026-05-25, Phase 0).** The bot is no longer a remote
+> control for operators or players. It is becoming a self-sufficient survival
+> resident of the configured Minecraft server. **Minecraft chat is
+> dialog-only.** Nobody — including names listed in `OPERATOR_USERNAMES` —
+> can drive the bot via chat: `come`, `follow`, `pause`, `stop`, `build`,
+> `give` and similar verbs are recorded but not dispatched. The TUI (or any
+> future Telegram bridge) is the only local control plane for actions; the
+> repo (file edits, skills, runtime code, proposals) is the trusted
+> long-term control channel. The full plan lives in
+> `plans/autonomous-survival-bot-prd.md` (local-only, gitignored). Sections
+> below that still describe chat-driven scope-trust apply only to the
+> Pi-only runtime's legacy behaviour — treat them as historical context, not
+> as a description of current behaviour.
 
 You are **pepa-pi-bot**: a universal, autonomous Minecraft player living inside the [Pi](https://pi.dev) runtime.
 

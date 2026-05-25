@@ -111,7 +111,7 @@ The bot **proposes its own patches** when something repeatedly fails:
 
 Supervisor (`npm run bot`) watches `runtime/*.js` and hot-restarts the child on file change, so during step 4 you can iterate quickly.
 
-See [`docs/runtime.md`](./docs/runtime.md) for the full lifecycle and the operator-chat command list (`pepa_bot status`, `come`, `pause`, etc.).
+See [`docs/runtime.md`](./docs/runtime.md) for the full lifecycle. **Note (2026-05-25):** MC chat is now dialog-only — operator commands (`come`, `pause`, `stop`, …) are no longer dispatched from chat; use the TUI for local control. See `plans/autonomous-survival-bot-prd.md` for the survival-bot pivot.
 
 ## Authentication
 
@@ -198,11 +198,13 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 
 🌳 **Phase 0 — Body** done. Bridge online, AuthMe handled, `hello` sent. See `skills/server-onboarding.md`.
 
-🌳 **Phase 1 — Presence** implemented and operator trust wired: the bridge stays online with bounded reconnects, keeps a rolling chat buffer, exposes status/recent-chat/operator/escalation tools, applies `OPERATOR_USERNAMES` as scope-only trust, and can prompt the Pi loop to reply sparingly.
+🌳 **Phase 1 — Presence** implemented: bridge stays online with bounded reconnects, rolling chat buffer, status/recent-chat tools, sparing replies.
 
-🌿 **Phase 2 — Locomotion/build rails** in progress: `mineflayer-pathfinder` is wired with guarded `mc_goto`, plus `mc_build_pyramid_5x5` for the operator-approved empty-site pyramid task. Dynamic following is still pending. Phase 5 self-extension is documented and in progress; Phase 6 escalation logging is implemented.
+🌿 **Phase 2 — Locomotion/build rails** in progress: `mineflayer-pathfinder` is wired with guarded `mc_goto`, plus `mc_build_pyramid_5x5`. Phase 5 self-extension and Phase 6 escalation logging are implemented.
 
-🌱 **Phase 3 — Goal-driven autonomy** seeded: [`docs/memory-model.md`](./docs/memory-model.md) defines shared-knowledge vs personal-memory; per-server `goal.md` / `plan.md` / `current-task.json` / `diary/` shape autonomous behaviour. Kickoff via [`prompts/live-your-life.md`](./prompts/live-your-life.md).
+🌱 **Phase 3 — Goal-driven autonomy** seeded: [`docs/memory-model.md`](./docs/memory-model.md) defines shared-knowledge vs personal-memory; per-server `goal.md` / `plan.md` / `current-task.json` / `diary/` shape autonomous behaviour.
+
+🌿 **Survival-bot pivot (2026-05-25)** — the bot is becoming a self-sufficient survival resident of the configured server. **MC chat is dialog-only**; operator/player chat commands are recorded but not dispatched (TUI is the only local control plane). Full plan: `plans/autonomous-survival-bot-prd.md` (local-only, gitignored). Phase 0 (chat-control cleanup, version auto-detect) is done; Phase 1+ (observability, skill substrate, survival curriculum, base/village loop) is the next focus.
 
 Full plan: [`docs/roadmap.md`](./docs/roadmap.md). Memory layout: [`docs/memory-model.md`](./docs/memory-model.md). Day-to-day judgement: "Operating principles" in [`AGENTS.md`](./AGENTS.md).
 

@@ -2,6 +2,14 @@
 
 > The bot grows by accretion. This file describes **the order in which it should grow**, not a set of features to build upfront. Each phase is something the agent itself can extend itself into, one skill at a time.
 
+> **Product pivot (2026-05-25).** The original roadmap below assumed an
+> operator-driven bot (chat summons, follow-me, etc.). The new direction is
+> an autonomous survival resident — see `plans/autonomous-survival-bot-prd.md`
+> for the active plan and phase structure. Where the two disagree, **the PRD
+> wins.** Phases 2 (chat-summons) and 3 (operator-priority loop) below are
+> kept as historical context but no longer represent shipping work; the new
+> phases are tracked in the PRD.
+
 Status legend: 🌱 not started · 🌿 in progress · 🌳 done · ⏸️ paused
 
 ## Phase 0 — Body 🌳
@@ -21,7 +29,12 @@ The bot is **on the server, all the time** (except for a clean human-issued disc
 
 Stretch: short-term chat memory (last N lines) so it can reference what was just said.
 
-## Phase 2 — Locomotion with guard rails 🌿
+## Phase 2 — Locomotion with guard rails ⏸️ (superseded by PRD)
+
+> Historical scope: chat-driven summons. As of the 2026-05-25 pivot, MC chat
+> cannot summon the bot. Pathfinder/safety primitives from this phase are
+> still useful for autonomous survival movement; the chat-driven summon
+> surface is removed. See PRD §5 (Target Architecture).
 
 The bot can be **summoned** by trusted/sanctioned coordinate requests via `mc_goto`; dynamic follow is still pending. Goal: "come to 100 64 -200", "follow me", "go to spawn" with three hard rails:
 
@@ -31,27 +44,32 @@ The bot can be **summoned** by trusted/sanctioned coordinate requests via `mc_go
 
 Stretch: `mc_position_share()` so the bot can answer "where are you?".
 
-## Phase 3 — Best life when idle / goal-driven autonomy 🌿 (kickoff)
+## Phase 3 — Best life when idle / goal-driven autonomy 🌿 (revised by PRD)
 
-When chat is quiet for some threshold (5-10 minutes of no addressed/non-trivial messages), the bot switches to **autonomous mode**.
+> The "live operator task → drop everything" step from the legacy priority
+> loop no longer applies — MC chat cannot create tasks. The revised
+> scheduler priority lives in PRD §5.3 (Task Scheduler Priority). The rest
+> of this section (goal/plan/current-task/diary structure) still applies
+> and is the foundation for the survival curriculum.
 
-Now it is **goal-driven**, not just idle-active:
+The bot is **always autonomous**: it does not wait for operator chat to
+have something to do.
 
-- A long-term goal lives in `state/<MC_HOST>/goal.md` (e.g. "build a small village and survive"). Personal memory, see `docs/memory-model.md`.
+- A long-term goal lives in `state/<MC_HOST>/goal.md`. Personal memory, see `docs/memory-model.md`.
 - Decomposed into milestones in `state/<MC_HOST>/plan.md`.
 - Current action is checkpointed in `state/<MC_HOST>/current-task.json` for resume-on-restart.
 - Daily journal in `state/<MC_HOST>/diary/YYYY-MM-DD.md`.
 
-Priority loop (highest to lowest):
-1. Live operator task → drop everything, do it.
-2. Live non-operator chat → reply briefly.
-3. Resume `current-task.json` if interrupted.
-4. Next milestone in `plan.md`.
-5. Decompose `goal.md` → new plan.
+Revised priority loop (per PRD §5.3):
+1. Emergency survival (death/lava/low HP/starvation).
+2. Finish or recover current task.
+3. Maintain base safety (light, shelter, repair).
+4. Execute current milestone.
+5. Expand village/base.
+6. Social reply if there is a relevant chat event.
+7. Idle diary/status heartbeat.
 
 Concrete activities while autonomous: scout/build modest base, farm food, store in chests, light area, defend at night, explore cautiously, build out toward the goal. Skills emerge: `farming-wheat`, `chest-organizer`, `careful-cave-mining`, `village-layout`, etc.
-
-Kicked off via [`prompts/live-your-life.md`](../prompts/live-your-life.md).
 
 ## Phase 4 — Telegram bridge 🌱
 

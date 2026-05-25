@@ -4,6 +4,12 @@
 > 2026-05-25. The pure Pi runtime (`pi` from repo root) still works and is
 > documented as a fallback at the bottom of this file.
 
+> **Phase 0 product pivot (2026-05-25).** MC chat is now **dialog-only** for
+> everyone, including `OPERATOR_USERNAMES`. The reflex loop no longer takes
+> commands from chat. Local control lives in the TUI (`p`/`s` hotkeys);
+> long-term control lives in the repo. See
+> `plans/autonomous-survival-bot-prd.md` for the survival-bot pivot.
+
 ## Why a hybrid runtime?
 
 The original design ran every tick inside Pi — the LLM saw the world, picked
@@ -41,8 +47,8 @@ new code for itself.
 │  │ - MC TCP         │  │ - tick every N sec   │  │ - Unix socket  ││
 │  │ - AuthMe handler │◀─│ - priority order:    │─▶│ - broadcasts   ││
 │  │ - chat / events  │  │   defend > eat       │  │   status/log/  ││
-│  │                  │  │   > sleep > current  │  │   chat events  ││
-│  │                  │  │   > idle             │  │ - accepts      ││
+│  │ (dialog-only)    │  │   > sleep > tech     │  │   chat events  ││
+│  │                  │  │   > autonomous       │  │ - accepts      ││
 │  │                  │  │ - NO LLM in path     │  │   commands     ││
 │  └──────────────────┘  └─────────┬────────────┘  └────────────────┘│
 │                                  │                                 │
@@ -100,18 +106,23 @@ TUI; the bot is unaffected.
 The chain (highest priority first), wired and dispatching real
 Mineflayer actions:
 
-1. **`operatorGoalReflex`** — if `OPERATOR_USERNAMES` issued a `come` /
-   `follow` command, satisfy it (walk to the operator's last known
-   position, reply in chat on arrival or failure).
-2. **`defendReflex`** — closest hostile within 4 m → `attackNearest`
+1. **`defendReflex`** — closest hostile within 4 m → `attackNearest`
    (equips best melee). Within 12 m + low HP or ≥3 hostiles → `fleeFrom`
    along the away-vector.
-3. **`eatReflex`** — food < 16 → `eatBestFood` (picks from
+2. **`eatReflex`** — food < 16 → `eatBestFood` (picks from
    FOOD_PRIORITY list, equip + consume). 5 s cooldown.
-4. **`sleepReflex`** — night + no hostile within 8 m → `sleepInBed`
+3. **`sleepReflex`** — night + no hostile within 8 m → `sleepInBed`
    (finds nearest placed bed within 16 blocks, paths there, sleeps).
-   30 s cooldown on failures.
-5. **`idleReflex`** — every 20th tick, log heartbeat (HP / food / pos).
+   5 min cooldown on failures.
+4. **`techTreeReflex`** — deterministic crafting progression
+   (planks → sticks → wooden axe → pickaxe → sword) when prerequisites
+   are in inventory.
+5. **`autonomousReflex`** — when nothing reactive fires: chop trees until
+   ~16 logs, then wander to discover new chunks.
+6. **`idleReflex`** — every 20th tick, log heartbeat (HP / food / pos).
+
+There is **no operator-goal reflex anymore.** MC chat does not create
+movement/build/mining tasks (Phase 0 of `plans/autonomous-survival-bot-prd.md`).
 
 Adding a new reflex = a function `(ctx) => { action, ... }` in
 `runtime/reflex.js`, inserted at the right priority. Actions live in
@@ -127,8 +138,8 @@ bot spawns `pi -p "<question>"` and streams its stdout into the Pi
 panel.
 
 **2. Automatic** — every tick where the entire reflex chain returns
-`noop` (no operator goal, no hostiles in reach, food fine, day or no
-bed, etc.) increments a counter. When the counter hits
+`noop` (no hostiles in reach, food fine, day or no bed, nothing to
+craft, nowhere to wander) increments a counter. When the counter hits
 `ESCALATE_AFTER_NOOPS = 20` (≈1 min at `tick=3s`), the bot fires
 `askPi` with the current snapshot and a fixed system prompt telling Pi
 to suggest one next action. 10 min cooldown so a permanently-idle bot
@@ -139,22 +150,26 @@ should only suggest what to do *with the existing tools*. If a deeper
 problem is happening, the failure-tracker (see Self-improvement) will
 file a proposal instead.
 
-## Operator chat commands
+## In-game chat (dialog-only)
 
-Players listed in `OPERATOR_USERNAMES` can address the bot in MC chat
-by prefixing the message with the bot's name:
+As of the Phase 0 survival-bot pivot, MC chat does **not** drive bot
+actions for anyone, including names listed in `OPERATOR_USERNAMES`.
+The bot will:
 
-```
-pepa_bot status      → bot replies with HP / food / pos / hostiles / busy
-pepa_bot come        → bot pathfinds to the operator's current position
-pepa_bot pause       → reflex loop stops
-pepa_bot resume      → reflex loop resumes
-pepa_bot stop        → graceful disconnect + process exit
-```
+- reply to greetings (`hi`, `привет`, etc.) and to being addressed by
+  name, rate-limited;
+- answer status questions (`pepa_bot status`, `как дела`, `what are
+  you doing?`) from the live snapshot;
+- detect command-like verbs (`come`, `follow`, `build`, `pause`,
+  `stop`, `give`, …) when addressed, record them in the diary, and
+  reply once per cooldown that MC chat is dialog-only.
 
-Unrecognized commands get a polite "didn't recognize" reply. Operator
-identity verification is the server's job (AuthMe on cracked,
-online-mode on premium) — the bot trusts the nickname.
+Local control of the bot (pause/resume/stop, sending chat manually,
+escalating to Pi) lives in the TUI. Long-term control (skills,
+runtime code, proposals) lives in the repo. `OPERATOR_USERNAMES` is
+still used to **label** speakers in logs (`operator <name>` vs
+`player <name>`), and remains the right place to plug a future
+trusted control channel (e.g. Telegram bridge).
 
 ## IPC protocol
 

@@ -12,7 +12,6 @@ import {
 	fleeFrom,
 	eatBestFood,
 	sleepInBed,
-	goTo,
 	chopNearestTree,
 	wander,
 	craftPlanks,
@@ -32,34 +31,11 @@ const REFLEX_LOG = "reflex";
 //   { action: "completed", kind, detail }    — fully sync, already done
 // Reflexes must NEVER throw — they log and return noop on failure.
 
-// ---- operator goal reflex --------------------------------------------------
-
-// Highest priority: if the operator gave a "come here" / "follow me" command,
-// satisfy that before anything else (except defending if HP is critical).
-function operatorGoalReflex(ctx) {
-	const goal = ctx.operatorGoal;
-	if (!goal) return { action: "noop" };
-	if (goal.kind === "come") {
-		ctx.dispatch(
-			() => goTo(ctx.bot, goal.x, goal.y, goal.z, 2),
-			`operator-come(${goal.from})`,
-			{
-				onComplete: (res) => {
-					if (res.ok) {
-						ctx.bot.chat(`${goal.from}: arrived.`);
-					} else {
-						ctx.bot.chat(`${goal.from}: couldn't reach you (${res.detail}).`);
-					}
-					ctx.clearOperatorGoal();
-				},
-			},
-		);
-		return { action: "dispatched", kind: "operator-come", label: `come ${goal.x},${goal.y},${goal.z}` };
-	}
-	return { action: "noop" };
-}
-
 // ---- defend ----------------------------------------------------------------
+//
+// Note: MC chat is dialog-only as of Phase 0 of the survival-bot PRD. There is
+// no operator-goal reflex anymore — operator/player chat cannot create a
+// movement/build/mining task. TUI is the only local control plane.
 
 function defendReflex(ctx) {
 	const s = ctx.snapshot;
@@ -298,7 +274,6 @@ function idleReflex(ctx) {
 }
 
 const REFLEXES = [
-	{ name: "operator-goal", fn: operatorGoalReflex },
 	{ name: "defend", fn: defendReflex },
 	{ name: "eat", fn: eatReflex },
 	{ name: "sleep", fn: sleepReflex },
