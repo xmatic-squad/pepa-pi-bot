@@ -233,6 +233,33 @@ function maybeFileProposal(label) {
 	appendDiary(`proposal filed: ${filename} (${summary})`);
 }
 
+// ---- player chat replies (non-operator) ------------------------------------
+
+// Rate-limited light replies to ordinary players. Spam guard is intentional:
+// the chat rate limit catches outbound flooding; this one prevents replying
+// to every greeting in a busy room.
+let lastPlayerReplyAt = 0;
+const PLAYER_REPLY_COOLDOWN_MS = 30_000;
+
+const GREETING_RE = /\b(hi|hello|hey|yo|sup|hola|привет|здаров|здарова|здорова|здравствуй|здравствуйте|салам)\b/i;
+
+function maybeReplyToPlayer(username, text) {
+	if (!bot) return;
+	const lower = text.trim().toLowerCase();
+	const botname = bot.username.toLowerCase();
+	const addressed = lower.includes(botname);
+	if (!addressed && !GREETING_RE.test(lower)) return;
+	const since = Date.now() - lastPlayerReplyAt;
+	if (since < PLAYER_REPLY_COOLDOWN_MS) return;
+	lastPlayerReplyAt = Date.now();
+
+	// Pick a small canned response. Non-operator chat is dialog-only by design
+	// — we don't act on player verbs, we just acknowledge presence.
+	const replies = ["yo", "hey", "hi", "привет"];
+	const reply = replies[Math.floor(Math.random() * replies.length)];
+	botChat(`${username}: ${reply}`);
+}
+
 // ---- operator chat commands ------------------------------------------------
 
 function isOperator(username) {
@@ -333,6 +360,12 @@ function connect() {
 			} catch (e) {
 				warn("operator", `handler threw: ${e.message}`);
 			}
+		} else {
+			try {
+				maybeReplyToPlayer(username, message);
+			} catch (e) {
+				warn("chat", `player reply handler threw: ${e.message}`);
+			}
 		}
 	});
 
@@ -416,6 +449,10 @@ function tick() {
 	if (bot && bot.entity) {
 		lastSnapshot = buildSnapshot(bot);
 		lastSnapshot.pendingProposals = listProposals().length;
+		lastSnapshot.lastReflex = reflexCtx.lastReflex ?? null;
+		lastSnapshot.busy = reflexCtx.busy
+			? { label: reflexCtx.currentActionLabel ?? "?" }
+			: null;
 		reflexCtx.snapshot = lastSnapshot;
 		if (!reflexPaused) {
 			const result = runTick(reflexCtx);

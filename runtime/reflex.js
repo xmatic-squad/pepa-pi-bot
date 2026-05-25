@@ -7,7 +7,7 @@
 // escalates to Pi after a threshold (see ESCALATE_AFTER_NOOPS).
 
 import { info, warn } from "./log.js";
-import { attackNearest, fleeFrom, eatBestFood, sleepInBed, goTo } from "./actions.js";
+import { attackNearest, fleeFrom, eatBestFood, sleepInBed, goTo, chopNearestTree, wander } from "./actions.js";
 
 const REFLEX_LOG = "reflex";
 
@@ -54,9 +54,13 @@ function defendReflex(ctx) {
 	const dist = s.closestHostile.distance;
 	const lowHp = (s.health ?? 20) <= 8;
 
-	// Two regimes:
+	// Three regimes — tightened to avoid the "82 distant hostiles → constant
+	// flee" pathology observed at this spawn:
 	//   - within 4m: melee attack
-	//   - 4-12m and either low HP or many hostiles: flee
+	//   - within 8m (and visibly hostile to us): flee
+	//   - low-HP fallback: flee anything within 12m
+	// Anything beyond 8m with full HP is ignored regardless of how many
+	// hostiles the perceive snapshot enumerates.
 	if (dist <= 4) {
 		ctx.dispatch(
 			() => attackNearest(ctx.bot, s.closestHostile.name),
@@ -64,17 +68,28 @@ function defendReflex(ctx) {
 		);
 		return { action: "dispatched", kind: "defend-attack", label: s.closestHostile.name };
 	}
-	if (dist <= 12 && (lowHp || (s.hostileCount ?? 0) >= 3)) {
-		const fromEntity = Object.values(ctx.bot.entities).find(
-			(e) => e.name === s.closestHostile.name && e.position && Math.abs(e.position.distanceTo(ctx.bot.entity.position) - dist) < 1.5,
-		);
-		ctx.dispatch(
-			() => fleeFrom(ctx.bot, fromEntity, 16),
-			`flee from ${s.closestHostile.name}`,
-		);
-		return { action: "dispatched", kind: "defend-flee", label: s.closestHostile.name };
+	const shouldFlee = (dist <= 8) || (lowHp && dist <= 12);
+	if (!shouldFlee) return { action: "noop" };
+
+	// Cooldown — if we just fled from this same mob type and it didn't work
+	// (timed out), don't immediately re-fire. Let other reflexes run.
+	const lastFlee = ctx.lastFleeAttempt;
+	if (lastFlee && lastFlee.name === s.closestHostile.name && Date.now() - lastFlee.ts < 60_000) {
+		return { action: "noop" };
 	}
-	return { action: "noop" };
+	ctx.lastFleeAttempt = { name: s.closestHostile.name, ts: Date.now() };
+
+	const fromEntity = Object.values(ctx.bot.entities).find(
+		(e) =>
+			e.name === s.closestHostile.name &&
+			e.position &&
+			Math.abs(e.position.distanceTo(ctx.bot.entity.position) - dist) < 1.5,
+	);
+	ctx.dispatch(
+		() => fleeFrom(ctx.bot, fromEntity, 16),
+		`flee from ${s.closestHostile.name}`,
+	);
+	return { action: "dispatched", kind: "defend-flee", label: s.closestHostile.name };
 }
 
 // ---- eat -------------------------------------------------------------------
@@ -107,9 +122,10 @@ function sleepReflex(ctx) {
 	if (!s.connected) return { action: "noop" };
 	if (s.isDay) return { action: "noop" };
 	if (s.closestHostile && s.closestHostile.distance < 8) return { action: "noop" }; // not safe
-	// Cooldown — don't retry sleep more than once per 30s if it failed.
+	// Longer cooldown after a failure — if there's no bed nearby, retrying
+	// every 30s blocks autonomous behaviour without ever succeeding.
 	const since = Date.now() - (ctx.lastSleepAttemptAt ?? 0);
-	if (since < 30_000) return { action: "noop" };
+	if (since < 5 * 60_000) return { action: "noop" };
 
 	ctx.lastSleepAttemptAt = Date.now();
 	ctx.dispatch(
@@ -123,6 +139,59 @@ function sleepReflex(ctx) {
 		},
 	);
 	return { action: "dispatched", kind: "sleep", label: "night" };
+}
+
+// ---- autonomous "live your best life" --------------------------------------
+
+// Triggered when no reactive reflex (operator/defend/eat/sleep) wants to act.
+// Picks ONE small proactive action and runs it. Cooldown so we don't fire on
+// every 3s tick — actions take 15-45s themselves and we want some breathing
+// room between them.
+const AUTONOMOUS_COOLDOWN_MS = 10_000;
+
+function autonomousReflex(ctx) {
+	const s = ctx.snapshot;
+	if (!s.connected) return { action: "noop" };
+
+	// Only suppress autonomous work at night when a hostile is in actual reach
+	// (within 16m). Distant mobs the perception layer happens to enumerate
+	// don't count — at this spawn there can be 80+ mobs visible but irrelevant
+	// to local action.
+	const nightClose = !s.isDay && s.closestHostile && s.closestHostile.distance <= 16;
+	if (nightClose) return { action: "noop" };
+
+	const since = Date.now() - (ctx.lastAutonomousAt ?? 0);
+	if (since < AUTONOMOUS_COOLDOWN_MS) return { action: "noop" };
+	ctx.lastAutonomousAt = Date.now();
+
+	// What to do: gather wood until we have a small stockpile, then wander a
+	// bit to find new chunks. If a recent chop attempt reported "no reachable
+	// log", switch to wander for the next 60s — chopping the same not-found
+	// position over and over is what the user observed live.
+	const inv = s.inventory ?? {};
+	const logCount = Object.entries(inv)
+		.filter(([name]) => name.endsWith("_log"))
+		.reduce((sum, [, n]) => sum + n, 0);
+
+	const noTreesRecently = ctx.noTreesUntil && Date.now() < ctx.noTreesUntil;
+	const wantChop = logCount < 16 && !noTreesRecently;
+	if (wantChop) {
+		ctx.dispatch(() => chopNearestTree(ctx.bot), "chop tree", {
+			onComplete: (res) => {
+				if (res.ok) {
+					info(REFLEX_LOG, `chopped ${res.detail?.logType ?? "log"}`);
+					ctx.noTreesUntil = 0; // success ⇒ trees exist around us
+				} else if (typeof res.detail === "string" && res.detail.includes("no reachable")) {
+					// No log within 32 blocks of the current position. Don't try
+					// again for 60s — wander first to find a new biome / chunk.
+					ctx.noTreesUntil = Date.now() + 60_000;
+				}
+			},
+		});
+		return { action: "dispatched", kind: "autonomous-chop", label: "chop tree" };
+	}
+	ctx.dispatch(() => wander(ctx.bot, 16), "wander", {});
+	return { action: "dispatched", kind: "autonomous-wander", label: "wander" };
 }
 
 // ---- idle ------------------------------------------------------------------
@@ -144,6 +213,7 @@ const REFLEXES = [
 	{ name: "defend", fn: defendReflex },
 	{ name: "eat", fn: eatReflex },
 	{ name: "sleep", fn: sleepReflex },
+	{ name: "autonomous", fn: autonomousReflex },
 	{ name: "idle", fn: idleReflex },
 ];
 
@@ -161,6 +231,7 @@ export function runTick(ctx) {
 			continue;
 		}
 		if (!outcome || outcome.action === "noop") continue;
+		ctx.lastReflex = { name: reflex.name, label: outcome.label ?? outcome.kind, ts: Date.now() };
 		return { reflex: reflex.name, ...outcome };
 	}
 	return null;
