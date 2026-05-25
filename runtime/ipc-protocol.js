@@ -14,6 +14,7 @@ export const EVENT_TYPES = Object.freeze({
 	ASK_PI_CHUNK: "ask-pi-chunk", // streamed stdout chunk from Pi subprocess
 	ASK_PI_DONE: "ask-pi-done", // Pi subprocess exited { code, durationMs }
 	HELLO: "hello", // sent on client connect with current snapshot
+	PROPOSAL: "proposal", // pending proposal payload { filename, body }
 });
 
 // Client → server commands.
@@ -24,6 +25,8 @@ export const COMMAND_TYPES = Object.freeze({
 	CHAT: "cmd:chat", // { text } sent into MC as bot
 	ASK_PI: "cmd:ask-pi", // { prompt } spawn `pi -p` and stream output
 	SNAPSHOT: "cmd:snapshot", // request immediate STATUS event
+	PROPOSAL_LATEST: "cmd:proposal-latest", // request latest pending proposal
+	PROPOSAL_APPROVE: "cmd:proposal-approve", // { filename } move to approved/
 });
 
 export function encodeFrame(obj) {

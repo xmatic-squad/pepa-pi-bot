@@ -11,8 +11,10 @@
   "scripts": {
     "agent": "pi",
     "agent:resume": "pi -c",
-    "bot": "node runtime/bot.js",
-    "tui": "tsx tui/tui.tsx"
+    "bot": "node runtime/supervisor.js",
+    "bot:bare": "node runtime/bot.js",
+    "tui": "tsx tui/tui.tsx",
+    "propose:apply": "node scripts/propose-apply.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

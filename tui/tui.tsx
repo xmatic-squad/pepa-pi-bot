@@ -35,6 +35,7 @@ type State = {
 	paused: boolean;
 	piStream: string;
 	piRunning: boolean;
+	proposal: { filename: string | null; body: string | null; total: number } | null;
 };
 
 type Action =
@@ -47,7 +48,9 @@ type Action =
 	| { type: "pi-chunk"; payload: { stream: string; text: string } }
 	| { type: "pi-done"; payload: { code: number; durationMs: number } }
 	| { type: "set-paused"; paused: boolean }
-	| { type: "hello"; payload: { snapshot: Snapshot; recentLogs: LogEntry[] } };
+	| { type: "hello"; payload: { snapshot: Snapshot; recentLogs: LogEntry[] } }
+	| { type: "proposal"; payload: { filename: string | null; body: string | null; total: number } }
+	| { type: "proposal-close" };
 
 const MAX_LOGS = 200;
 const MAX_CHAT = 100;
@@ -88,6 +91,10 @@ function reducer(state: State, action: Action): State {
 				snapshot: action.payload.snapshot || {},
 				logs: action.payload.recentLogs || [],
 			};
+		case "proposal":
+			return { ...state, proposal: action.payload };
+		case "proposal-close":
+			return { ...state, proposal: null };
 		default:
 			return state;
 	}
@@ -114,7 +121,38 @@ function StatusBar({ snapshot, paused, connectedToBot }: { snapshot: Snapshot; p
 					: "?"}{" "}
 				day={String(snapshot.isDay ?? "?")} hostiles={snapshot.hostileCount ?? 0}
 				{snapshot.closestHostile ? `  closest=${snapshot.closestHostile.name}@${snapshot.closestHostile.distance}m` : ""}
+				{snapshot.pendingProposals ? <Text color="magenta" bold>{`  [proposals ${snapshot.pendingProposals}, press y]`}</Text> : null}
 			</Text>
+		</Box>
+	);
+}
+
+function ProposalPanel({
+	proposal,
+	onClose,
+	onApprove,
+}: {
+	proposal: { filename: string | null; body: string | null; total: number };
+	onClose: () => void;
+	onApprove: () => void;
+}) {
+	if (!proposal.filename) {
+		return (
+			<Box borderStyle="round" flexDirection="column" paddingX={1} borderColor="gray">
+				<Text>No pending proposals. ([Esc] to close)</Text>
+			</Box>
+		);
+	}
+	const lines = (proposal.body ?? "").split("\n").slice(0, 30);
+	return (
+		<Box borderStyle="round" flexDirection="column" paddingX={1} borderColor="magenta">
+			<Text bold color="magenta">
+				proposal: {proposal.filename}  (total pending: {proposal.total})
+			</Text>
+			{lines.map((line, i) => (
+				<Text key={i}>{line}</Text>
+			))}
+			<Text dimColor>[y]es approve  [n]o close  — uses npm run propose:apply afterwards</Text>
 		</Box>
 	);
 }
@@ -175,6 +213,7 @@ function App() {
 		paused: false,
 		piStream: "",
 		piRunning: false,
+		proposal: null,
 	});
 
 	const [client] = useState(() => createIpcClient());
@@ -207,6 +246,9 @@ function App() {
 				case EVENT_TYPES.ASK_PI_DONE:
 					dispatch({ type: "pi-done", payload: frame.payload });
 					break;
+				case EVENT_TYPES.PROPOSAL:
+					dispatch({ type: "proposal", payload: frame.payload });
+					break;
 			}
 		};
 		(client as any).on("connected", onConnected);
@@ -222,6 +264,16 @@ function App() {
 
 	useInput((input, key) => {
 		if (mode !== "idle") return; // text input has its own handling
+		// Proposal panel is open — accept y/n only.
+		if (state.proposal) {
+			if (input === "y" && state.proposal.filename) {
+				client.send(COMMAND_TYPES.PROPOSAL_APPROVE, { filename: state.proposal.filename });
+				dispatch({ type: "proposal-close" });
+			} else if (input === "n" || key.escape) {
+				dispatch({ type: "proposal-close" });
+			}
+			return;
+		}
 		if (input === "q") {
 			client.close();
 			exit();
@@ -240,6 +292,7 @@ function App() {
 		}
 		if (input === "c") setMode("chat");
 		if (input === "a") setMode("ask-pi");
+		if (input === "y") client.send(COMMAND_TYPES.PROPOSAL_LATEST, {});
 	});
 
 	function submit(value: string) {
@@ -254,7 +307,7 @@ function App() {
 
 	const hotkeyHint =
 		mode === "idle"
-			? "[p]ause/resume  [s]top  [r]efresh  [c]hat  [a]sk-pi  [q]uit"
+			? "[p]ause/resume  [s]top  [r]efresh  [c]hat  [a]sk-pi  [y] proposals  [q]uit"
 			: mode === "chat"
 			? "chat → MC (Enter to send, Esc to cancel)"
 			: "ask-pi → spawn pi -p (Enter to send)";
@@ -267,6 +320,18 @@ function App() {
 				<ChatPanel chat={state.chat} />
 			</Box>
 			<PiPanel piStream={state.piStream} piRunning={state.piRunning} />
+			{state.proposal ? (
+				<ProposalPanel
+					proposal={state.proposal}
+					onClose={() => dispatch({ type: "proposal-close" })}
+					onApprove={() => {
+						if (state.proposal?.filename) {
+							client.send(COMMAND_TYPES.PROPOSAL_APPROVE, { filename: state.proposal.filename });
+							dispatch({ type: "proposal-close" });
+						}
+					}}
+				/>
+			) : null}
 			<Box borderStyle="single" paddingX={1}>
 				{mode === "idle" ? (
 					<Text dimColor>{hotkeyHint}</Text>
