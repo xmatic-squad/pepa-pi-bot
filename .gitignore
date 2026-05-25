@@ -23,6 +23,9 @@ state/
 logs/
 *.log
 
+# Local execution plans / operator scratch PRDs
+plans/
+
 # OS / editor
 .DS_Store
 Thumbs.db
