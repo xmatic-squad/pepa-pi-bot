@@ -141,6 +141,18 @@ function textResult(text: string, details?: Record<string, unknown>) {
 	return { content: [{ type: "text", text }], details };
 }
 
+// Hard timeout wrapper. Mineflayer's collectBlock / pathfinder can hang
+// indefinitely when the target block name doesn't match or the path is
+// unreachable. Without this the entire Pi loop blocks until manual kill.
+function withTimeout<T>(p: Promise<T> | T, ms: number, label: string): Promise<T> {
+	return Promise.race([
+		Promise.resolve(p),
+		new Promise<T>((_, reject) =>
+			setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s — likely wrong block name, unreachable, or pathfinder stuck`)), ms),
+		),
+	]);
+}
+
 // ---- tool registration ----------------------------------------------------
 
 export default async function mindcraftSkills(pi: ExtensionAPI) {
@@ -256,7 +268,9 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		async execute(_id, params: { blockType: string; count?: number }) {
 			const bot = getBot();
 			const count = Math.max(1, Math.min(64, Math.floor(params.count ?? 1)));
-			const ok = await safeCall("collectBlock", () => skills.collectBlock(bot, params.blockType, count));
+			const ok = await safeCall("collectBlock", () =>
+				withTimeout(skills.collectBlock(bot, params.blockType, count), 90_000, `collectBlock(${params.blockType}, ${count})`),
+			);
 			return textResult(ok ? `Collected ${count} of ${params.blockType}.` : `collectBlock returned false for ${params.blockType}.`, { ok, blockType: params.blockType, count });
 		},
 	});
@@ -284,7 +298,9 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		executionMode: "sequential",
 		async execute(_id, params: { x: number; y: number; z: number; minDistance?: number }) {
 			const bot = getBot();
-			const ok = await safeCall("goToPosition", () => skills.goToPosition(bot, params.x, params.y, params.z, params.minDistance ?? 2));
+			const ok = await safeCall("goToPosition", () =>
+				withTimeout(skills.goToPosition(bot, params.x, params.y, params.z, params.minDistance ?? 2), 120_000, `goToPosition(${params.x},${params.y},${params.z})`),
+			);
 			return textResult(ok ? `Arrived near ${params.x},${params.y},${params.z}.` : `goToPosition returned false.`, { ok, ...params });
 		},
 	});
@@ -299,7 +315,11 @@ export default async function mindcraftSkills(pi: ExtensionAPI) {
 		async execute(_id, params: { blockType: string; minDistance?: number; range?: number }) {
 			const bot = getBot();
 			const ok = await safeCall("goToNearestBlock", () =>
-				skills.goToNearestBlock(bot, params.blockType, params.minDistance ?? 2, params.range ?? 64),
+				withTimeout(
+					skills.goToNearestBlock(bot, params.blockType, params.minDistance ?? 2, params.range ?? 64),
+					90_000,
+					`goToNearestBlock(${params.blockType})`,
+				),
 			);
 			return textResult(ok ? `Arrived near nearest ${params.blockType}.` : `goToNearestBlock returned false for ${params.blockType}.`, { ok, ...params });
 		},
