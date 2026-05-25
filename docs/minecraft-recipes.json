@@ -1,0 +1,228 @@
+{
+  "target": "Minecraft Java 1.21.x",
+  "sources": [
+    "https://minecraft.wiki/w/Crafting",
+    "https://minecraft.wiki/w/Recipe",
+    "https://minecraft.wiki/w/Planks",
+    "https://minecraft.wiki/w/Stick",
+    "https://minecraft.wiki/w/Tools",
+    "https://minecraft.wiki/w/Furnace",
+    "https://minecraft.wiki/w/Chest",
+    "https://minecraft.wiki/w/Bed",
+    "https://minecraft.wiki/w/Torch",
+    "https://minecraft.wiki/w/Food",
+    "https://minecraft.wiki/w/Paper",
+    "https://minecraft.wiki/w/Book",
+    "https://minecraft.wiki/w/Sign"
+  ],
+  "legend": {
+    "any_log": "any overworld log/stem accepted by the recipe",
+    "plank": "any matching wooden plank unless a specific wood is named",
+    "stone": "cobblestone, cobbled_deepslate, or blackstone where the vanilla recipe accepts it",
+    "wool": "same-color wool for beds",
+    "dye_variant": "output color/material follows input variant"
+  },
+  "recipes": [
+    {
+      "name": "planks",
+      "shape": [["any_log"]],
+      "shapeless": true,
+      "yields": 4
+    },
+    {
+      "name": "stick",
+      "shape": [["plank"], ["plank"]],
+      "yields": 4
+    },
+    {
+      "name": "crafting_table",
+      "shape": [["plank", "plank"], ["plank", "plank"]],
+      "yields": 1
+    },
+    {
+      "name": "wooden_pickaxe",
+      "shape": [["plank", "plank", "plank"], [null, "stick", null], [null, "stick", null]],
+      "yields": 1
+    },
+    {
+      "name": "wooden_axe",
+      "shape": [["plank", "plank"], ["plank", "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "wooden_shovel",
+      "shape": [["plank"], ["stick"], ["stick"]],
+      "yields": 1
+    },
+    {
+      "name": "wooden_sword",
+      "shape": [["plank"], ["plank"], ["stick"]],
+      "yields": 1
+    },
+    {
+      "name": "wooden_hoe",
+      "shape": [["plank", "plank"], [null, "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "stone_pickaxe",
+      "shape": [["stone", "stone", "stone"], [null, "stick", null], [null, "stick", null]],
+      "yields": 1
+    },
+    {
+      "name": "stone_axe",
+      "shape": [["stone", "stone"], ["stone", "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "stone_shovel",
+      "shape": [["stone"], ["stick"], ["stick"]],
+      "yields": 1
+    },
+    {
+      "name": "stone_sword",
+      "shape": [["stone"], ["stone"], ["stick"]],
+      "yields": 1
+    },
+    {
+      "name": "stone_hoe",
+      "shape": [["stone", "stone"], [null, "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "iron_pickaxe",
+      "shape": [["iron_ingot", "iron_ingot", "iron_ingot"], [null, "stick", null], [null, "stick", null]],
+      "yields": 1
+    },
+    {
+      "name": "iron_axe",
+      "shape": [["iron_ingot", "iron_ingot"], ["iron_ingot", "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "iron_shovel",
+      "shape": [["iron_ingot"], ["stick"], ["stick"]],
+      "yields": 1
+    },
+    {
+      "name": "iron_sword",
+      "shape": [["iron_ingot"], ["iron_ingot"], ["stick"]],
+      "yields": 1
+    },
+    {
+      "name": "iron_hoe",
+      "shape": [["iron_ingot", "iron_ingot"], [null, "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "golden_hoe",
+      "shape": [["gold_ingot", "gold_ingot"], [null, "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "diamond_hoe",
+      "shape": [["diamond", "diamond"], [null, "stick"], [null, "stick"]],
+      "yields": 1
+    },
+    {
+      "name": "netherite_hoe",
+      "station": "smithing_table",
+      "base": "diamond_hoe",
+      "addition": "netherite_ingot",
+      "template": "netherite_upgrade_smithing_template",
+      "yields": 1
+    },
+    {
+      "name": "furnace",
+      "shape": [["stone", "stone", "stone"], ["stone", null, "stone"], ["stone", "stone", "stone"]],
+      "yields": 1
+    },
+    {
+      "name": "chest",
+      "shape": [["plank", "plank", "plank"], ["plank", null, "plank"], ["plank", "plank", "plank"]],
+      "yields": 1
+    },
+    {
+      "name": "bed",
+      "shape": [["wool", "wool", "wool"], ["plank", "plank", "plank"]],
+      "yields": 1,
+      "note": "all wool must be the same color; output color follows wool"
+    },
+    {
+      "name": "wooden_door",
+      "shape": [["plank", "plank"], ["plank", "plank"], ["plank", "plank"]],
+      "yields": 3,
+      "note": "output wood variant follows planks"
+    },
+    {
+      "name": "fence",
+      "shape": [["plank", "stick", "plank"], ["plank", "stick", "plank"]],
+      "yields": 3,
+      "note": "output wood variant follows planks"
+    },
+    {
+      "name": "ladder",
+      "shape": [["stick", null, "stick"], ["stick", "stick", "stick"], ["stick", null, "stick"]],
+      "yields": 3
+    },
+    {
+      "name": "torch",
+      "shape": [["coal_or_charcoal"], ["stick"]],
+      "yields": 4
+    },
+    {
+      "name": "bucket",
+      "shape": [["iron_ingot", null, "iron_ingot"], [null, "iron_ingot", null]],
+      "yields": 1
+    },
+    {
+      "name": "shears",
+      "shape": [[null, "iron_ingot"], ["iron_ingot", null]],
+      "yields": 1
+    },
+    {
+      "name": "bow",
+      "shape": [[null, "stick", "string"], ["stick", null, "string"], [null, "stick", "string"]],
+      "yields": 1
+    },
+    {
+      "name": "arrow",
+      "shape": [["flint"], ["stick"], ["feather"]],
+      "yields": 4
+    },
+    {
+      "name": "bread",
+      "shape": [["wheat", "wheat", "wheat"]],
+      "yields": 1
+    },
+    {
+      "name": "cake",
+      "shape": [["milk_bucket", "milk_bucket", "milk_bucket"], ["sugar", "egg", "sugar"], ["wheat", "wheat", "wheat"]],
+      "yields": 1,
+      "returns": ["bucket", "bucket", "bucket"]
+    },
+    {
+      "name": "sugar",
+      "shape": [["sugar_cane"]],
+      "shapeless": true,
+      "yields": 1
+    },
+    {
+      "name": "paper",
+      "shape": [["sugar_cane", "sugar_cane", "sugar_cane"]],
+      "yields": 3
+    },
+    {
+      "name": "book",
+      "shape": [["paper", "paper", "paper", "leather"]],
+      "shapeless": true,
+      "yields": 1
+    },
+    {
+      "name": "sign",
+      "shape": [["plank", "plank", "plank"], ["plank", "plank", "plank"], [null, "stick", null]],
+      "yields": 3,
+      "note": "output wood variant follows planks"
+    }
+  ]
+}
