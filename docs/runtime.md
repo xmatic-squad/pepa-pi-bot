@@ -246,6 +246,28 @@ in-process. The package is **not** a default dep — install it explicitly
 (`npm i prismarine-viewer`) before enabling. If missing, the runtime
 logs a warning and continues.
 
+### Compatibility hardening (Phase 7)
+
+Several modules now guard against the live regressions PRD §7 Phase 7
+explicitly calls out:
+
+- **`runtime/movement-profiles.js`** — named profiles (`GATHER`,
+  `TRAVEL`, `FLEE`, `BUILD`, `RETURN_TO_BASE`) as pure descriptors;
+  `applyProfile(profile, bot)` writes a fresh `Movements` to
+  pathfinder. Stops one skill's `canDig=false` from leaking into the
+  next skill's path.
+- **`runtime/owned-blocks.js`** — JSONL ledger of blocks this bot
+  placed (and removed). `isOwned({x,y,z})` for O(1) lookups.
+  `ensureDir()` makes the dir lazily so first-write doesn't fail.
+- **`runtime/claim-avoidance.js`** — `classifyArea({blocks, isOwned})`
+  returns `player_build` / `natural_or_owned` / `insufficient_data`
+  based on man-made block density vs ownership ratio. Designed for
+  the gather/place skills to call before touching a contested area.
+- **`runtime/skills/compat.test.js`** — runs `groups.js` against real
+  `minecraft-data` registries for 1.18.2, 1.20.4, 1.21.5; verifies
+  that version-sensitive blocks (e.g. `pale_oak_log`) only appear
+  where they should.
+
 ### Self-improvement v2 (Phase 6)
 
 Two classes of proposals now land in `state/<host>/proposals/`:
