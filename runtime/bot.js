@@ -41,6 +41,7 @@ import { computeState, STATES } from "./state.js";
 import { createNoProgressDetector } from "./no-progress.js";
 import { maybeStartViewer } from "./viewer.js";
 import { nextMilestone as nextCurriculumMilestone } from "./curriculum.js";
+import { listLocations } from "./locations.js";
 import { classifyIntent, INTENTS } from "./social/intent.js";
 import { generateReply } from "./social/reply.js";
 import { createChatMemory } from "./social/memory.js";
@@ -358,6 +359,79 @@ let lastChatReplyAt = 0;
 const CHAT_REPLY_COOLDOWN_MS = 30_000;
 const chatMemory = createChatMemory();
 
+// Rate-limit Pi escalations from chat. The chat path is the cheapest
+// way to burn an LLM call accidentally — every addressed banter line
+// would otherwise spawn `pi -p`. We cap at MAX_PI_CHAT_PER_HOUR with a
+// hard minimum gap of MIN_PI_CHAT_GAP_MS between calls.
+const MAX_PI_CHAT_PER_HOUR = 6;
+const MIN_PI_CHAT_GAP_MS = 90_000;
+const recentPiChatTs = [];
+let lastPiChatAt = 0;
+
+function piChatAllowed(now = Date.now()) {
+	while (recentPiChatTs.length && now - recentPiChatTs[0] > 3600_000) recentPiChatTs.shift();
+	if (recentPiChatTs.length >= MAX_PI_CHAT_PER_HOUR) return false;
+	if (now - lastPiChatAt < MIN_PI_CHAT_GAP_MS) return false;
+	return true;
+}
+
+function escalateChatToPi({ speaker, text, intent }) {
+	if (!piChatAllowed()) {
+		info("chat", `pi escalation suppressed (rate limit) for ${speaker}`);
+		return;
+	}
+	lastPiChatAt = Date.now();
+	recentPiChatTs.push(lastPiChatAt);
+
+	// Compose a slim context — recent chat from this speaker, the bot's
+	// own state, and an explicit dialog-only reminder so Pi doesn't try
+	// to "act" on a player request via its output. We never write Pi's
+	// output to the world; the only side-effect is a single chat line.
+	const speakerTail = chatMemory.tail(speaker, 5).map((e) => `${speaker}: ${e.text}`).join("\n");
+	const stateLine = JSON.stringify({
+		runtimeState: lastSnapshot?.runtimeState,
+		activeSkill: lastSnapshot?.activeSkill,
+		currentMilestone: lastSnapshot?.currentMilestone,
+		noProgressReason: lastSnapshot?.noProgressReason,
+		hp: lastSnapshot?.health,
+		food: lastSnapshot?.food,
+	});
+	const prompt = [
+		`You are the social cortex for an autonomous Minecraft bot named "${bot?.username}".`,
+		`The bot's primary loop ignores chat commands — MC chat is dialog-only.`,
+		`Your ONLY output is one short chat line (<= 140 chars) the bot will say to ${speaker}.`,
+		`No code, no JSON, no quoting. Just the message. Use the language ${speaker} used.`,
+		``,
+		`Bot's current state:`,
+		stateLine,
+		``,
+		`Recent chat from ${speaker}:`,
+		speakerTail || `(no prior lines)`,
+		``,
+		`Latest line (intent=${intent}): ${text}`,
+	].join("\n");
+
+	let buf = "";
+	askPi({
+		prompt,
+		onChunk: (chunk) => {
+			if (chunk?.stream === "stdout") buf += chunk.text;
+		},
+		onDone: (result) => {
+			info("chat", `pi banter reply done code=${result.code} dur=${result.durationMs}ms len=${buf.length}`);
+			if (result.code !== 0) return;
+			const line = buf.trim().split("\n").find((l) => l.trim()) ?? "";
+			if (!line) return;
+			// Be defensive — drop the bot's own name prefix Pi sometimes
+			// adds, and cap to 200 chars so we never burn the rate-limit
+			// with a wall of text.
+			const cleaned = line.replace(/^[`"']+|[`"']+$/g, "").slice(0, 200);
+			lastChatReplyAt = Date.now();
+			botChat(`${speaker}: ${cleaned}`);
+		},
+	});
+}
+
 function isOperator(username) {
 	if (!username) return false;
 	return config.operators.includes(username.toLowerCase());
@@ -417,9 +491,12 @@ function handleChat(username, text) {
 		botChat(result.send);
 		return;
 	}
-	// Templates didn't fit and the bot was addressed (ADDRESSED_BANTER) —
-	// escalation to Pi is allowed but not done from here; future work will
-	// route through a rate-limited askPi with prompt-cached context.
+	if (result?.escalate) {
+		// Templates didn't fit AND the bot was addressed → ask Pi for a
+		// one-liner. Hard rate-limited so addressed-banter lines can't
+		// drain the LLM budget.
+		escalateChatToPi({ speaker: username, text: trimmed, intent });
+	}
 }
 
 // ---- connect ---------------------------------------------------------------
@@ -604,6 +681,13 @@ function tick() {
 		//   - curriculum.js (deterministic early-game progression)
 		// The TUI prefers the curriculum's structured milestone (it has a
 		// suggested skill); falls back to the planner line for late-game.
+		// locations.json drives the village.* milestones — read each tick
+		// (cheap: a small JSON file, no parse on cold cache).
+		try {
+			lastSnapshot.locations = listLocations();
+		} catch {
+			lastSnapshot.locations = {};
+		}
 		const curriculum = nextCurriculumMilestone(lastSnapshot);
 		lastSnapshot.curriculum = curriculum;
 		lastSnapshot.currentMilestone = curriculum?.milestone?.title ?? cachedMilestone;

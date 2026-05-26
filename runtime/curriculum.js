@@ -130,6 +130,16 @@ const MILESTONES = [
 		isDone: (inv) => has(inv, "torch", 4),
 		suggest: () => ({ skillId: "craft.torch" }),
 	},
+	{
+		id: "village.base-site",
+		title: "Pick a base site",
+		// We treat this as done when a "base" location exists in
+		// locations.json. The curriculum can't read that file from here
+		// (would couple it to disk), so we expose a snapshot hint:
+		// `snapshot.locations?.base` is filled by bot.js.
+		isDone: (_inv, snap) => !!snap?.locations?.base,
+		suggest: () => ({ skillId: "village.choose-base" }),
+	},
 ];
 
 export function isInventoryFull(snapshot) {
