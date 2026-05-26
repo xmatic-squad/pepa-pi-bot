@@ -412,59 +412,93 @@ export async function chopNearestTree(bot) {
 
 // ---- exploration -----------------------------------------------------------
 
+// wander — probe-then-go. Old version picked a random angle and trusted
+// pathfinder; on this server pathfinder routinely times out (the bot is
+// in a 3-block corridor, on a tree, in spawn area without good graph)
+// and the blind-walk fallback then went in the SAME direction the
+// pathfinder couldn't solve. 2026-05-26 fix: try every cardinal
+// direction for 800 ms each, measure the actual Δ in-world, then commit
+// to the best one for the rest of the budget.
 export async function wander(bot, radius = 12) {
 	ensurePathfinder(bot);
 	setMovementsForTravel(bot);
-	// Pick a random offset that's at least 6 blocks away — small enough to be
-	// safe, large enough to not be a no-op when we're stuck on the same block.
+
+	const trials = await probeCardinalSteps(bot, 800);
+	const best = trials.reduce((b, t) => (t.dist > b.dist ? t : b), { dist: 0 });
+
+	// If nothing moved at all, the bot is wedged in all four cardinal
+	// directions (corner of a corridor, surrounded by leaves, hole). Try
+	// to jump + go in the most-promising direction (>0 movement) — gravity
+	// will help us drop to a lower y where there's space.
+	if (best.dist < 0.5) {
+		const fallback = trials.reduce((b, t) => (t.dist > b.dist ? t : b), { dist: 0, yaw: 0 });
+		info("action", `wander: all cardinals blocked, jumping fallback yaw=${fallback.yaw?.toFixed?.(2)}`);
+		try { await bot.look(fallback.yaw ?? 0, 0, true); } catch {}
+		bot.setControlState("forward", true);
+		bot.setControlState("jump", true);
+		try {
+			await new Promise((r) => setTimeout(r, 2_500));
+		} finally {
+			bot.setControlState("forward", false);
+			bot.setControlState("jump", false);
+		}
+		return { ok: true, detail: { mode: "wedged-jump", trials } };
+	}
+
+	// Commit to best direction.
+	const wantDist = Math.max(6, Math.min(radius, best.dist * 4 + 2));
 	const here = bot.entity.position;
-	const angle = Math.random() * Math.PI * 2;
-	const dist = 6 + Math.random() * (radius - 6);
-	const tx = Math.round(here.x + Math.cos(angle) * dist);
-	const tz = Math.round(here.z + Math.sin(angle) * dist);
+	const tx = Math.round(here.x + Math.sin(-best.yaw) * wantDist);
+	const tz = Math.round(here.z + Math.cos(-best.yaw) * wantDist);
 	const ty = Math.round(here.y);
-	info("action", `wander: → ${tx},${ty},${tz} (dist=${dist.toFixed(1)})`);
+	info("action", `wander: best=${best.name}(Δ=${best.dist.toFixed(1)}) → ${tx},${ty},${tz}`);
 	try {
 		await withTimeout(
 			bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 2)),
-			15_000,
+			12_000,
 			`wander(${tx},${tz})`,
 		);
-		return { ok: true, detail: { to: { x: tx, y: ty, z: tz } } };
+		return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, via: best.name } };
 	} catch (e) {
-		warn("action", `wander pathfinder failed: ${e.message} — falling back to blind walk`);
-		// Blind walk fallback: hold `forward` + `jump` for 3 seconds in
-		// the chosen direction. Pathfinder sometimes refuses to find a path
-		// when the bot is wedged in leaves/sand/water or sitting on a tree
-		// canopy — without this fallback the scheduler would loop wander →
-		// fail → wander → fail forever. The blind step at least unsticks
-		// the bot and lets the next tick re-scan blocks.
+		warn("action", `wander pathfinder failed: ${e.message} — continuing blind in ${best.name}`);
+		try { await bot.look(best.yaw, 0, true); } catch {}
+		bot.setControlState("forward", true);
+		bot.setControlState("jump", true);
 		try {
-			await blindStepToward(bot, tx, tz, 3_000);
-			return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, mode: "blind" } };
-		} catch (e2) {
-			warn("action", `wander blind walk also failed: ${e2.message}`);
-			return { ok: false, detail: `pathfinder: ${e.message}; blind: ${e2.message}` };
+			await new Promise((r) => setTimeout(r, 2_500));
+		} finally {
+			bot.setControlState("forward", false);
+			bot.setControlState("jump", false);
 		}
+		return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, mode: "blind", via: best.name } };
 	}
 }
 
-async function blindStepToward(bot, targetX, targetZ, durationMs) {
-	try {
-		const here = bot.entity.position;
-		const dx = targetX - here.x;
-		const dz = targetZ - here.z;
-		// Yaw such that +Z is south (0) and angles go clockwise looking down.
-		// Mineflayer uses radians.
-		const yaw = Math.atan2(-dx, -dz);
-		await bot.look(yaw, 0, true);
+const CARDINAL_YAWS = [
+	{ name: "N", yaw: Math.PI },
+	{ name: "E", yaw: -Math.PI / 2 },
+	{ name: "S", yaw: 0 },
+	{ name: "W", yaw: Math.PI / 2 },
+];
+
+async function probeCardinalSteps(bot, durationMs = 800) {
+	const trials = [];
+	for (const { name, yaw } of CARDINAL_YAWS) {
+		try { await bot.look(yaw, 0, true); } catch {}
+		const before = bot.entity.position.clone();
 		bot.setControlState("forward", true);
-		bot.setControlState("jump", true);
-		await new Promise((r) => setTimeout(r, durationMs));
-	} finally {
-		bot.setControlState("forward", false);
-		bot.setControlState("jump", false);
+		try {
+			await new Promise((r) => setTimeout(r, durationMs));
+		} finally {
+			bot.setControlState("forward", false);
+		}
+		const after = bot.entity.position;
+		const dist = Math.hypot(after.x - before.x, after.z - before.z);
+		trials.push({ name, yaw, dist });
+		// settle physics
+		await new Promise((r) => setTimeout(r, 150));
 	}
+	return trials;
 }
 
 // ---- crafting --------------------------------------------------------------

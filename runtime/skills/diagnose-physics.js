@@ -21,19 +21,45 @@ function withTimeout(promise, ms, label) {
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function probeForward(bot, durationMs = 2_000) {
+// Probe forward by trying every cardinal direction in sequence and
+// keeping the BEST result. If the bot is wedged on a single side
+// (treetop with leaves on one side, open air on the other) we still
+// get a true positive instead of a false "BROKEN".
+async function probeForward(bot, durationMsPerDir = 1_200) {
 	const before = bot.entity.position.clone();
-	try {
-		bot.setControlState("forward", true);
-		await new Promise((r) => setTimeout(r, durationMs));
-	} finally {
-		bot.setControlState("forward", false);
+	const trials = [];
+	const yaws = [
+		{ name: "N", yaw: Math.PI },           // -Z
+		{ name: "E", yaw: -Math.PI / 2 },      // +X
+		{ name: "S", yaw: 0 },                  // +Z
+		{ name: "W", yaw: Math.PI / 2 },       // -X
+	];
+	for (const { name, yaw } of yaws) {
+		try { await bot.look(yaw, 0, true); } catch {}
+		const t0 = bot.entity.position.clone();
+		try {
+			bot.setControlState("forward", true);
+			await new Promise((r) => setTimeout(r, durationMsPerDir));
+		} finally {
+			bot.setControlState("forward", false);
+		}
+		const t1 = bot.entity.position;
+		const dx = t1.x - t0.x;
+		const dz = t1.z - t0.z;
+		const dist = Math.hypot(dx, dz);
+		trials.push({ dir: name, dist });
+		// settle gravity
+		await new Promise((r) => setTimeout(r, 300));
 	}
-	const after = bot.entity.position;
-	const dx = after.x - before.x;
-	const dz = after.z - before.z;
-	const dist = Math.hypot(dx, dz);
-	return { before, after: after.clone(), dist, works: dist > 0.5 };
+	const best = trials.reduce((b, t) => (t.dist > b.dist ? t : b), { dir: "?", dist: 0 });
+	const after = bot.entity.position.clone();
+	return {
+		before, after,
+		trials,
+		bestDir: best.dir,
+		bestDist: best.dist,
+		works: best.dist > 0.5,
+	};
 }
 
 async function probeJump(bot) {
@@ -88,7 +114,8 @@ export const skill = Object.freeze({
 		info("action", "diag.physics: starting probe");
 
 		const fwd = await probeForward(bot);
-		info("action", `diag.physics: forward Δ=${fwd.dist.toFixed(2)} (${fwd.works ? "OK" : "BROKEN"})`);
+		const trialsStr = fwd.trials?.map((t) => `${t.dir}:${t.dist.toFixed(1)}`).join(" ") ?? "?";
+		info("action", `diag.physics: forward bestΔ=${fwd.bestDist.toFixed(2)} (${fwd.bestDir}) trials=[${trialsStr}] (${fwd.works ? "OK" : "BROKEN"})`);
 
 		const jmp = await probeJump(bot);
 		info("action", `diag.physics: jump ΔY=${jmp.deltaY.toFixed(2)} (${jmp.works ? "OK" : "BROKEN"})`);
@@ -96,7 +123,7 @@ export const skill = Object.freeze({
 		const dig = await probeDig(bot);
 		info("action", `diag.physics: dig ${dig.before ?? "?"}→${dig.after ?? "?"} (${dig.works ? "OK" : "BROKEN"}: ${dig.reason ?? ""})`);
 
-		const summary = `physics probe: forward=${fwd.works ? "ok" : "BROKEN"}(Δ${fwd.dist.toFixed(1)}) jump=${jmp.works ? "ok" : "BROKEN"}(Δy${jmp.deltaY.toFixed(1)}) dig=${dig.works ? "ok" : "BROKEN"}(${dig.before ?? "no-target"}→${dig.after ?? "?"})`;
+		const summary = `physics probe: forward=${fwd.works ? "ok" : "BROKEN"}(best=${fwd.bestDir}@${fwd.bestDist.toFixed(1)}) jump=${jmp.works ? "ok" : "BROKEN"}(Δy${jmp.deltaY.toFixed(1)}) dig=${dig.works ? "ok" : "BROKEN"}(${dig.before ?? "no-target"}→${dig.after ?? "?"})`;
 		appendDiary(summary);
 
 		return {

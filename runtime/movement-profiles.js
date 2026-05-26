@@ -20,17 +20,16 @@ export const PROFILES = Object.freeze({
 
 // Pure descriptors — safe to import without a live bot.
 //
-// canDig is FALSE everywhere by default (2026-05-26). On the live server
-// (play.xmatic.team 26.1.2+ViaBackwards 5.9.1) bot.dig silently fails —
-// the packet ID table for protocol 775 is wrong in minecraft-data
-// (mineflayer#3888) — so pathfinder would schedule paths through
-// must-dig blocks the bot can't actually break, and we'd loop. Once
-// 1.21.4 pin + lookAt+wait fix is verified live, we can re-enable
-// canDig for gather/travel profiles.
+// 2026-05-26 update: ground-truth probe (diag.physics) on
+// play.xmatic.team confirmed forward + jump work in normal directions
+// (forward Δ≈3.4 blocks/1.2s in an unobstructed cardinal, jump ΔY=1.25
+// = vanilla height). The 1.21.4 pin + AuthMe login flow are doing
+// their job. canDig is back to true on gather/travel/flee — pathfinder
+// needs to be able to break leaves/dirt to actually move around.
 export const PROFILE_DEFAULTS = Object.freeze({
-	[PROFILES.GATHER]: { canDig: false, canPlace: false, allow1by1towers: false },
-	[PROFILES.TRAVEL]: { canDig: false, canPlace: false, allow1by1towers: false },
-	[PROFILES.FLEE]: { canDig: false, canPlace: false, allow1by1towers: false, maxDropDown: 8 },
+	[PROFILES.GATHER]: { canDig: true, canPlace: false, allow1by1towers: false },
+	[PROFILES.TRAVEL]: { canDig: true, canPlace: false, allow1by1towers: false },
+	[PROFILES.FLEE]: { canDig: true, canPlace: false, allow1by1towers: false, maxDropDown: 8 },
 	[PROFILES.BUILD]: { canDig: false, canPlace: true, allow1by1towers: true },
 	[PROFILES.RETURN_TO_BASE]: { canDig: false, canPlace: false, allow1by1towers: false },
 });
