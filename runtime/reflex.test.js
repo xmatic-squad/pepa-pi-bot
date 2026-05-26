@@ -66,18 +66,37 @@ test("defend wins over curriculum when hostile in melee", () => {
 	assert.match(dispatches[0].label, /attack zombie/);
 });
 
-test("eat wins over curriculum when food low and bot has food", () => {
+test("eat wins over curriculum when food low and bot has food in inventory", () => {
 	const { ctx, dispatches } = makeCtx({
 		snapshot: {
 			connected: true,
 			health: 20,
 			food: 10,
+			// 2026-05-26: eat reflex now requires actual food in inventory
+			// to avoid the eat-spam loop that fired every tick on empty
+			// inventory.
+			inventory: { bread: 1 },
 			curriculum: { plan: { skillId: "gather.logs" } },
 		},
 	});
 	const out = runTick(ctx);
 	assert.equal(out.reflex, "eat");
 	assert.equal(dispatches[0].label, "eat");
+});
+
+test("eat reflex does NOT dispatch when no food in inventory (no spam)", () => {
+	const { ctx, dispatches } = makeCtx({
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 10,
+			inventory: { dirt: 1 },
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+	const out = runTick(ctx);
+	// Falls through to curriculum.
+	assert.equal(out.reflex, "curriculum");
 });
 
 test("curriculum dispatches suggested skill by id", () => {

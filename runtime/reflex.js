@@ -26,6 +26,13 @@ import {
 } from "./actions.js";
 import { runSkill, getSkill } from "./skills/index.js";
 
+// Each "wander hint" triggered by a skill returning no_target should take
+// the bot meaningfully further than 16 blocks — otherwise the curriculum
+// re-fires the same skill, gets no_target again, and the bot loops in
+// place. We escalate every other wander hint into explore.far (~48
+// blocks, quadrant-rotating).
+let consecutiveWanderHints = 0;
+
 const REFLEX_LOG = "reflex";
 
 // A reflex returns one of:
@@ -117,11 +124,28 @@ function eatReflex(ctx) {
 
 // ---- sleep -----------------------------------------------------------------
 
+// Inventory check so the sleep reflex doesn't waste a dispatch when we
+// have no bed AND no bed nearby — let the curriculum (survive.bed) drive
+// bed acquisition instead. The action itself still re-checks, but pre-
+// filtering here saves a dispatch + 5-min cooldown on impossible states.
+const ANY_BED_NAME_RE = /(?:^|_)bed$/;
+function hasAnyBedItem(inv) {
+	return Object.keys(inv ?? {}).some((n) => ANY_BED_NAME_RE.test(n));
+}
+
 function sleepReflex(ctx) {
 	const s = ctx.snapshot;
 	if (!s.connected) return { action: "noop" };
 	if (s.isDay) return { action: "noop" };
 	if (s.closestHostile && s.closestHostile.distance < 8) return { action: "noop" }; // not safe
+	// Skip dispatch entirely when there is no bed in inventory AND no
+	// placed bed location we know about. Otherwise every restart at night
+	// burns a "sleep → no bed" dispatch+5-min cooldown for nothing — saw
+	// this live 2026-05-26 where the bot would dispatch sleep right after
+	// every spawn before doing anything productive.
+	const bedItem = hasAnyBedItem(s.inventory);
+	const bedLoc = s.locations?.shelter ?? s.locations?.base ?? null;
+	if (!bedItem && !bedLoc) return { action: "noop" };
 	// Longer cooldown after a failure — if there's no bed nearby, retrying
 	// every 30s blocks autonomous behaviour without ever succeeding.
 	const since = Date.now() - (ctx.lastSleepAttemptAt ?? 0);
@@ -171,10 +195,16 @@ function curriculumReflex(ctx) {
 	const wanderHintUntil = ctx.skillBackoff?.["__wander_hint__"] ?? 0;
 	const wantWander = wanderHintUntil && Date.now() < wanderHintUntil;
 
-	// No skill plan from curriculum OR a recent skill asked us to wander —
-	// dispatch a wander fallback so we keep moving.
+	// No skill plan from curriculum OR a recent skill asked us to wander.
+	// First hint → small wander (might just be 32-block reach issue).
+	// Every subsequent hint while still inside the backoff window → use
+	// explore.far so the bot actually leaves the patch it's stuck in.
 	if (!plan?.skillId || wantWander) {
 		ctx.lastCurriculumAt = Date.now();
+		if (wantWander && consecutiveWanderHints >= 1) {
+			ctx.dispatch(() => runSkill("explore.far", ctx), "explore.far", {});
+			return { action: "dispatched", kind: "curriculum-explore-far", label: "explore.far" };
+		}
 		ctx.dispatch(() => wander(ctx.bot, 16), "wander", {});
 		return { action: "dispatched", kind: "curriculum-wander", label: "wander" };
 	}
@@ -204,6 +234,7 @@ function curriculumReflex(ctx) {
 				// Same fix the old autonomous reflex applied for "no reachable
 				// log" — switch to exploration for a minute.
 				ctx.skillBackoff["__wander_hint__"] = Date.now() + SKILL_BACKOFF_MS;
+				consecutiveWanderHints++;
 			}
 			if (!res?.ok) {
 				// missing_tool / missing_material / no_target shouldn't be
@@ -215,6 +246,7 @@ function curriculumReflex(ctx) {
 			} else {
 				// Success clears the wander hint immediately.
 				ctx.skillBackoff["__wander_hint__"] = 0;
+				consecutiveWanderHints = 0;
 			}
 		},
 	});

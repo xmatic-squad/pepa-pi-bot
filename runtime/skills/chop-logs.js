@@ -32,7 +32,7 @@ export const skill = Object.freeze({
 			};
 		}
 		const msg = String(res.detail ?? "");
-		const code = msg.includes("no reachable log")
+		const code = (msg.includes("no reachable log") || msg.includes("no log within"))
 			? "no_target"
 			: msg.includes("timed out")
 				? "timeout"

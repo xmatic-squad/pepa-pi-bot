@@ -358,15 +358,19 @@ export async function chopNearestTree(bot) {
 	// findBlock invokes the matcher for blocks that pass the maxDistance
 	// pre-filter; in dense areas some have a synthetic shape with no
 	// `.position`. Guard or we crash before we even start pathfinding.
+	// Search radius widened to 64 (2026-05-26): live spawn at this server
+	// had no trees in 32-block radius and the bot looped wander→gather→
+	// fail forever. 64 ≈ one chunk in either direction.
+	const SEARCH_RADIUS = 64;
 	const log = bot.findBlock({
 		matching: (b) => {
 			if (!b || !b.position || !LOG_NAMES.includes(b.name)) return false;
 			const key = `${b.position.x},${b.position.y},${b.position.z}`;
 			return !blacklist.has(key);
 		},
-		maxDistance: 32,
+		maxDistance: SEARCH_RADIUS,
 	});
-	if (!log) return { ok: false, detail: "no reachable log within 32 blocks" };
+	if (!log) return { ok: false, detail: `no reachable log within ${SEARCH_RADIUS} blocks` };
 
 	ensureCollectBlock(bot);
 	setMovementsForGather(bot);
@@ -403,13 +407,43 @@ export async function wander(bot, radius = 12) {
 	try {
 		await withTimeout(
 			bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 2)),
-			30_000,
+			15_000,
 			`wander(${tx},${tz})`,
 		);
 		return { ok: true, detail: { to: { x: tx, y: ty, z: tz } } };
 	} catch (e) {
-		warn("action", `wander failed: ${e.message}`);
-		return { ok: false, detail: e.message };
+		warn("action", `wander pathfinder failed: ${e.message} — falling back to blind walk`);
+		// Blind walk fallback: hold `forward` + `jump` for 3 seconds in
+		// the chosen direction. Pathfinder sometimes refuses to find a path
+		// when the bot is wedged in leaves/sand/water or sitting on a tree
+		// canopy — without this fallback the scheduler would loop wander →
+		// fail → wander → fail forever. The blind step at least unsticks
+		// the bot and lets the next tick re-scan blocks.
+		try {
+			await blindStepToward(bot, tx, tz, 3_000);
+			return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, mode: "blind" } };
+		} catch (e2) {
+			warn("action", `wander blind walk also failed: ${e2.message}`);
+			return { ok: false, detail: `pathfinder: ${e.message}; blind: ${e2.message}` };
+		}
+	}
+}
+
+async function blindStepToward(bot, targetX, targetZ, durationMs) {
+	try {
+		const here = bot.entity.position;
+		const dx = targetX - here.x;
+		const dz = targetZ - here.z;
+		// Yaw such that +Z is south (0) and angles go clockwise looking down.
+		// Mineflayer uses radians.
+		const yaw = Math.atan2(-dx, -dz);
+		await bot.look(yaw, 0, true);
+		bot.setControlState("forward", true);
+		bot.setControlState("jump", true);
+		await new Promise((r) => setTimeout(r, durationMs));
+	} finally {
+		bot.setControlState("forward", false);
+		bot.setControlState("jump", false);
 	}
 }
 

@@ -25,6 +25,7 @@ import { info, warn } from "../log.js";
 import { skill as chopLogs } from "./chop-logs.js";
 import { skill as eat } from "./eat.js";
 import { skill as wander } from "./wander.js";
+import { skill as exploreFar } from "./explore-far.js";
 import { skill as gatherStone } from "./gather-stone.js";
 import { skill as gatherWool } from "./gather-wool.js";
 import { skill as chooseBase } from "./choose-base.js";
@@ -60,6 +61,7 @@ function register(skill) {
 register(chopLogs);
 register(eat);
 register(wander);
+register(exploreFar);
 register(gatherStone);
 register(gatherWool);
 register(chooseBase);
