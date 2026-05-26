@@ -48,6 +48,8 @@ import { generateReply } from "./social/reply.js";
 import { createChatMemory } from "./social/memory.js";
 import { createStuckIncidentDetector } from "./stuck-incident.js";
 import { createSkillMetrics } from "./skill-metrics.js";
+import { createWorldJournal } from "./world-journal.js";
+import { createScenarioMemory, situationHash } from "./scenario-memory.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -74,6 +76,8 @@ let lastEscalationAt = 0;
 const noProgress = createNoProgressDetector();
 const stuckIncident = createStuckIncidentDetector();
 const skillMetrics = createSkillMetrics();
+const worldJournal = createWorldJournal();
+const scenarioMemory = createScenarioMemory();
 let lastResult = null; // { label, ok, code, detail, ts }
 let lastFailureAt = 0;
 let lastPlanReadAt = 0;
@@ -82,6 +86,9 @@ let cachedPlanExists = false;
 const MILESTONE_CACHE_MS = 30_000;
 
 // Reflex context — passed into reflex.js every tick. Mutable across ticks.
+// Memory stores (journal + memory) live here so skill code can consult
+// them directly — gather.* can preferentially target known log positions,
+// deposit-surplus can mark the chest it placed, etc.
 const reflexCtx = {
 	bot: null,
 	snapshot: lastSnapshot,
@@ -93,6 +100,8 @@ const reflexCtx = {
 	// Tracks repeated failure of the same labelled action — triggers a proposal.
 	recentFailures: [], // [{label, detail, ts}], capped at 10
 	dispatch: dispatchAction,
+	journal: worldJournal,
+	memory: scenarioMemory,
 };
 
 let chatTimestamps = [];
@@ -156,6 +165,45 @@ function maybeHandleAuthPrompt(text) {
 // Reflexes call this to fire an async action without blocking the tick.
 // Sets busy=true, runs fn, clears busy when done; optional onComplete callback
 // receives the action's { ok, detail } result.
+// Pull worldDelta fields written by skills (e.g. {choppedAt, logType,
+// minedAt, blockType, gotWool, baseAt, shelterAt, depositedTotal,
+// plantedAt, harvestedAt, tilledAt}) and turn them into journal lines.
+// Any unknown delta is silently skipped — skills can extend the world
+// journal without bot.js needing to know each schema.
+function recordWorldDeltaToJournal(label, res, snapshot) {
+	const wd = res?.worldDelta;
+	if (!wd || typeof wd !== "object") return;
+	try {
+		if (wd.choppedAt) worldJournal.append({ kind: "chopped", name: wd.logType ?? "log", at: wd.choppedAt });
+		if (wd.minedAt) worldJournal.append({ kind: "chopped", name: wd.blockType ?? "stone", at: wd.minedAt });
+		if (wd.placedAt) worldJournal.append({ kind: "placed", name: wd.placedType ?? "block", at: wd.placedAt });
+		if (wd.baseAt) worldJournal.append({ kind: "base", name: "base", at: wd.baseAt });
+		if (wd.shelterAt) worldJournal.append({ kind: "shelter", name: "shelter", at: wd.shelterAt });
+		if (wd.plantedAt) worldJournal.append({ kind: "farm", name: "planted", at: wd.plantedAt });
+		if (wd.harvestedAt) worldJournal.append({ kind: "farm", name: "harvested", at: wd.harvestedAt });
+		if (wd.tilledAt) worldJournal.append({ kind: "farm", name: "tilled", at: wd.tilledAt });
+		// failures: blacklisted / no_target — log a dead-end at current pos
+		if (res?.code === "no_target" && snapshot?.position) {
+			worldJournal.append({
+				kind: "dead_end",
+				name: label,
+				reason: res?.detail ? String(res.detail).slice(0, 80) : "no_target",
+				at: snapshot.position,
+			});
+		}
+		if (res?.code === "silent_dig_failure" && snapshot?.position) {
+			worldJournal.append({
+				kind: "dead_end",
+				name: label,
+				reason: "silent_dig_failure",
+				at: wd?.blacklisted ?? snapshot.position,
+			});
+		}
+	} catch (e) {
+		warn("journal", `append from ${label} failed: ${e.message}`);
+	}
+}
+
 function dispatchAction(fn, label, opts = {}) {
 	if (reflexCtx.busy) {
 		warn("dispatch", `tried to dispatch ${label} while busy with ${reflexCtx.currentActionLabel}`);
@@ -163,9 +211,14 @@ function dispatchAction(fn, label, opts = {}) {
 	}
 	reflexCtx.busy = true;
 	reflexCtx.currentActionLabel = label;
+	// Capture the situation hash BEFORE the action runs so a failure is
+	// attributable to the state at dispatch time, not the state after the
+	// (partial) effect.
+	const startSnap = lastSnapshot;
+	const startSituation = situationHash(startSnap);
 	// current-task is a resume anchor — keep it small. Embedding the full
 	// perception snapshot blows the file up to ~3 KB per write × every action.
-	writeCurrentTask({ label, status: "in_progress", position: lastSnapshot.position });
+	writeCurrentTask({ label, status: "in_progress", position: startSnap.position });
 	info("dispatch", `→ ${label}`);
 	Promise.resolve()
 		.then(() => fn())
@@ -184,6 +237,14 @@ function dispatchAction(fn, label, opts = {}) {
 				ts: Date.now(),
 			};
 			skillMetrics.record(label, ok);
+			scenarioMemory.record({
+				skillId: label,
+				situation: startSituation,
+				code: lastResult.code,
+				ok,
+				detail: res?.detail,
+			});
+			recordWorldDeltaToJournal(label, res, startSnap);
 			if (!ok) {
 				lastFailureAt = lastResult.ts;
 				recordFailure(label, res?.detail);
@@ -210,6 +271,13 @@ function dispatchAction(fn, label, opts = {}) {
 				ts: Date.now(),
 			};
 			skillMetrics.record(label, false);
+			scenarioMemory.record({
+				skillId: label,
+				situation: startSituation,
+				code: "threw",
+				ok: false,
+				detail: String(e?.message ?? e),
+			});
 			lastFailureAt = lastResult.ts;
 			recordFailure(label, String(e?.message ?? e));
 		})
@@ -710,6 +778,8 @@ function tick() {
 			snapshot: lastSnapshot,
 			lastResult,
 			metrics: lastSnapshot.skillMetrics,
+			journalSummary: worldJournal.summary(),
+			scenarioTail: scenarioMemory.recentTailFor({ n: 12 }),
 			now,
 		});
 		if (stuck?.fire) {

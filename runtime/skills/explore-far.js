@@ -69,7 +69,23 @@ export const skill = Object.freeze({
 		// gives us a free-direction signal cheaply.
 		const dist = Math.max(24, args.distance ?? 48);
 		const trials = await probeCardinalStep(bot, 800);
-		const best = trials.reduce((b, t) => (t.dist > b.dist ? t : b), { dist: 0, yaw: 0, name: "?" });
+		const movable = trials.filter((t) => t.dist > 0.5);
+
+		// Journal-aware: if more than one direction is walkable, prefer the
+		// one in the LEANEST quadrant (least amount of stuff we've already
+		// catalogued, including dead_end markers — so we don't loop the same
+		// area). Falls back to "best by distance" when only one direction
+		// works or journal is empty.
+		let best = trials.reduce((b, t) => (t.dist > b.dist ? t : b), { dist: 0, yaw: 0, name: "?" });
+		if (movable.length > 1 && ctx?.journal?.leanestQuadrant) {
+			const here = bot.entity.position;
+			const { best: leanest } = ctx.journal.leanestQuadrant({ x: here.x, z: here.z, radius: 96 });
+			const QUAD_TO_CARDINAL = { NE: "N", SE: "E", SW: "S", NW: "W" };
+			const preferredName = QUAD_TO_CARDINAL[leanest];
+			const preferred = movable.find((t) => t.name === preferredName);
+			if (preferred) best = preferred;
+			info("action", `explore.far: journal says leanest quadrant=${leanest} → prefer ${preferredName}`);
+		}
 		info("action", `explore.far: cardinal probe trials=${trials.map((t) => `${t.name}:${t.dist.toFixed(1)}`).join(" ")} best=${best.name}`);
 
 		if (best.dist < 0.5) {

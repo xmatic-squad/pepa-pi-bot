@@ -31,7 +31,7 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 
 	// Returns { fire: true, body, kind, editScope } when an incident should
 	// be filed this tick; null otherwise.
-	function check({ snapshot, lastResult, metrics, now = Date.now() }) {
+	function check({ snapshot, lastResult, metrics, journalSummary, scenarioTail, now = Date.now() }) {
 		const reason = snapshot?.noProgressReason ?? null;
 		if (!reason) {
 			reset();
@@ -71,6 +71,16 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 				.join(", ")
 			: "(none)";
 
+		const journalLine = journalSummary
+			? `byKind=${JSON.stringify(journalSummary.byKind ?? {})} buckets=${journalSummary.totalBuckets ?? 0}`
+			: "(no journal)";
+
+		const scenarioLines = Array.isArray(scenarioTail) && scenarioTail.length
+			? scenarioTail.map((e) =>
+				`- \`${e.skillId}\` ${e.ok ? "OK" : "FAIL"} code=${e.code ?? "?"} ${e.detail ? `(${e.detail.slice?.(0, 120) ?? ""})` : ""} situ=${e.situationHashShort ?? "?"}`,
+			).join("\n")
+			: "_(no scenario memory recorded yet)_";
+
 		const body = [
 			`# Stuck on \`${reason}\``,
 			"",
@@ -88,15 +98,23 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 				? `\`${lastResult.label}\` → ${lastResult.code ?? (lastResult.ok ? "ok" : "fail")}${lastResult.detail ? ` (${JSON.stringify(lastResult.detail).slice(0, 200)})` : ""}`
 				: "_(none recorded)_",
 			"",
-			"## Skill metrics so far",
+			"## Skill metrics so far (this process lifetime)",
 			"",
 			metricsLine,
+			"",
+			"## World journal (what we have discovered so far)",
+			"",
+			journalLine,
+			"",
+			"## Recent scenario memory (last attempts, what worked / failed in similar situations)",
+			"",
+			scenarioLines,
 			"",
 			"## Suggested fix",
 			"",
 			suggested
-				? `Improve \`${suggested}\` so the bot can clear the \`${reason}\` blocker. Touch only the listed files. Add or update tests under \`runtime/skills/\`.`
-				: `The curriculum has no suggested skill for this state. Either teach the curriculum a new milestone OR add a recovery skill that turns this reason code into a productive action.`,
+				? `Improve \`${suggested}\` so the bot can clear the \`${reason}\` blocker, OR teach a NEW skill that handles this kind of situation if no single edit fixes it. Touch only the listed files (the test files under runtime/**/*.test.js are auto-allowed). Use the scenario-memory entries above to avoid re-introducing patterns that already failed.`
+				: `The curriculum has no suggested skill for this state. Either teach the curriculum a new milestone OR add a recovery skill that turns this reason code into a productive action. The scenario memory above shows what's been tried.`,
 			"",
 			"## Edit scope (auto-patch must obey this)",
 			"",

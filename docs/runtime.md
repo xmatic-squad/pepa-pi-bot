@@ -246,6 +246,33 @@ in-process. The package is **not** a default dep — install it explicitly
 (`npm i prismarine-viewer`) before enabling. If missing, the runtime
 logs a warning and continues.
 
+### Memory: world-journal + scenario-memory (2026-05-26)
+
+Two persistent stores under `state/<host>/`:
+
+- **`world-journal.jsonl`** — append-only log of discovered points
+  (`{kind, name, at:{x,y,z}, ts}`). Skills feed it automatically via
+  `worldDelta` on each successful dispatch — chops, mines, placements,
+  base/shelter location, planted/harvested crops, plus `dead_end`
+  markers on `no_target` / `silent_dig_failure`. Indexed by a 16-block
+  spatial grid so `nearest({kind, x, z, radius})` is O(neighbors).
+  Pruned at 6 h age + 10k line ceiling. `leanestQuadrant({x, z})`
+  returns the cardinal quadrant the bot has explored LEAST — used by
+  `explore.far` to circle rather than retread the same patch.
+- **`scenarios.jsonl`** — sliding window of `(skillId, situationHash,
+  code, ok, detail, ts)` tuples. `situationHash` is a coarse fingerprint
+  of where + how the bot was (16-cell + 8y bucket, day/night, food
+  bucket, hp bucket, inventory key set, closest hostile name). The
+  curriculum reflex calls `memory.shouldSkip({skillId, situation})` —
+  ≥3 failures of the same `(skill, situation)` within 30 min and the
+  reflex auto-converts into a wander hint instead of re-dispatching the
+  failing skill. A subsequent success in the same situation un-locks it.
+
+Both stores feed stuck-incident proposal bodies: when the LLM is
+asked to patch a stuck state, it sees `byKind` journal counts AND the
+last 12 scenario-memory entries, so it can write a structural fix
+based on what's actually been tried, not just one snapshot.
+
 ### Scheduler driven by the curriculum (2026-05-26)
 
 The reflex chain is now: `defend → eat → sleep → curriculum → idle`.

@@ -25,6 +25,7 @@ import {
 	wander,
 } from "./actions.js";
 import { runSkill, getSkill } from "./skills/index.js";
+import { situationHash } from "./scenario-memory.js";
 
 // Each "wander hint" triggered by a skill returning no_target should take
 // the bot meaningfully further than 16 blocks — otherwise the curriculum
@@ -225,6 +226,20 @@ function curriculumReflex(ctx) {
 	// breathing room rather than retrying every cooldown.
 	const backoffUntil = ctx.skillBackoff?.[skillId] ?? 0;
 	if (Date.now() < backoffUntil) return { action: "noop" };
+
+	// Scenario memory: this exact (skill, situation) pattern failed N times
+	// recently? Skip and let the wander/explore hint move us to a different
+	// situation. The hash includes coarse position + day/night + food + hp
+	// + inventory keys + nearby hostile — "same kind of place + state".
+	if (ctx.memory?.shouldSkip && ctx.snapshot) {
+		const sit = situationHash(ctx.snapshot);
+		if (ctx.memory.shouldSkip({ skillId, situation: sit })) {
+			// Pretend a wander hint fired so the next tick will explore.
+			ctx.skillBackoff = ctx.skillBackoff ?? {};
+			ctx.skillBackoff["__wander_hint__"] = Date.now() + SKILL_BACKOFF_MS;
+			return { action: "noop" };
+		}
+	}
 
 	ctx.lastCurriculumAt = Date.now();
 	ctx.dispatch(() => runSkill(skillId, ctx), skillId, {
