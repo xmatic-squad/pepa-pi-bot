@@ -22,20 +22,31 @@ function snapAfter(stage, addInventory = {}, extras = {}) {
 			oak_log: 16, oak_planks: 6, stick: 6,
 			wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
 		},
+		// New: survive.bed sits between wood.tools and stone.32, so every
+		// later-stage baseline carries a red_bed in inventory to mark the
+		// bed milestone as done.
+		"survive.bed": {
+			oak_log: 16, oak_planks: 6, stick: 6,
+			wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+			red_bed: 1,
+		},
 		"stone.32": {
 			oak_log: 16, oak_planks: 6, stick: 6,
 			wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+			red_bed: 1,
 			cobblestone: 32,
 		},
 		"stone.tools": {
 			oak_log: 16, oak_planks: 6, stick: 8,
 			wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+			red_bed: 1,
 			cobblestone: 8,
 			stone_axe: 1, stone_pickaxe: 1, stone_sword: 1, furnace: 1,
 		},
 		"food.basic": {
 			oak_log: 16, oak_planks: 6, stick: 8,
 			wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+			red_bed: 1,
 			cobblestone: 8,
 			stone_axe: 1, stone_pickaxe: 1, stone_sword: 1, furnace: 1,
 			bread: 4,
@@ -43,6 +54,7 @@ function snapAfter(stage, addInventory = {}, extras = {}) {
 		"storage.chest": {
 			oak_log: 16, oak_planks: 6, stick: 8,
 			wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+			red_bed: 1,
 			cobblestone: 8,
 			stone_axe: 1, stone_pickaxe: 1, stone_sword: 1, furnace: 1,
 			bread: 4, chest: 1,
@@ -83,8 +95,23 @@ test("wooden axe present, pickaxe missing → craft.wooden-pickaxe", () => {
 	assert.equal(got.plan.skillId, "craft.wooden-pickaxe");
 });
 
-test("wooden tools done, no cobble → stone.32, suggests gather.stone", () => {
+// After wood tools the curriculum first asks for a bed (survive.bed,
+// new 2026-05-26) — we need a bed before stone-tier so the bot can
+// sleep through the night and stop blocking other players.
+test("wooden tools done, no bed → survive.bed, suggests gather.wool", () => {
 	const got = nextMilestone(snapAfter("wood.tools"));
+	assert.equal(got.milestone.id, "survive.bed");
+	assert.equal(got.plan.skillId, "gather.wool");
+});
+
+test("wool ready but no bed → survive.bed, suggests craft.bed", () => {
+	const got = nextMilestone(snapAfter("wood.tools", { red_wool: 3 }));
+	assert.equal(got.milestone.id, "survive.bed");
+	assert.equal(got.plan.skillId, "craft.bed");
+});
+
+test("bed acquired → curriculum advances to stone.32", () => {
+	const got = nextMilestone(snapAfter("survive.bed"));
 	assert.equal(got.milestone.id, "stone.32");
 	assert.equal(got.plan.skillId, "gather.stone");
 });
@@ -118,12 +145,19 @@ test("all done → null", () => {
 	const inv = {
 		oak_log: 16, oak_planks: 8, stick: 8,
 		wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+		red_bed: 1,
 		cobblestone: 32,
 		stone_axe: 1, stone_pickaxe: 1, stone_sword: 1, furnace: 1,
 		bread: 4, chest: 1, torch: 8,
 	};
 	assert.equal(
-		nextMilestone(snap(inv, { food: 20, locations: { base: { x: 0, y: 64, z: 0 } } })),
+		nextMilestone(snap(inv, {
+			food: 20,
+			locations: {
+				base: { x: 0, y: 64, z: 0 },
+				shelter: { x: 0, y: 64, z: 0 },
+			},
+		})),
 		null,
 	);
 });
@@ -149,7 +183,7 @@ test("inventoryFull flag is returned alongside milestone, not as override", () =
 test("listMilestones exposes ordered ids for diary/TUI", () => {
 	const ms = listMilestones();
 	assert.equal(ms[0].id, "wood.16");
-	assert.equal(ms[ms.length - 1].id, "village.base-site");
+	assert.equal(ms[ms.length - 1].id, "village.shelter");
 	for (const m of ms) {
 		assert.equal(typeof m.id, "string");
 		assert.equal(typeof m.title, "string");

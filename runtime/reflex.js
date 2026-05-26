@@ -84,24 +84,34 @@ function defendReflex(ctx) {
 
 // ---- eat -------------------------------------------------------------------
 
+// Lightweight food allowlist — must match what eatBestFood actually tries.
+// Kept inline so reflex doesn't have to import the groups module.
+const EAT_REFLEX_FOOD = new Set([
+	"cooked_beef", "cooked_porkchop", "cooked_mutton", "cooked_chicken",
+	"cooked_rabbit", "cooked_salmon", "cooked_cod", "baked_potato",
+	"bread", "carrot", "apple", "sweet_berries", "melon_slice",
+	"beef", "porkchop", "chicken", "mutton",
+]);
+
 function eatReflex(ctx) {
 	const s = ctx.snapshot;
 	if (!s.connected) return { action: "noop" };
 	if (s.food === undefined || s.food >= 16) return { action: "noop" };
-	// Don't eat if we just ate (the food bar refresh on the server has a
-	// small lag — re-firing within 5s would just fail bot.consume).
+	// Don't dispatch eat if there's literally no food in inventory — the
+	// previous version dispatched every tick, got "no food in inventory" and
+	// burned the whole reflex chain on a hopeless eat-spam. (Observed live
+	// 2026-05-26.) The curriculum has food.basic as a real milestone now;
+	// keep eat reflex strictly for "we have food, eat it" cases.
+	const inv = s.inventory ?? {};
+	const hasFood = Object.keys(inv).some((n) => EAT_REFLEX_FOOD.has(n));
+	if (!hasFood) return { action: "noop" };
+	// Cooldown on attempts (not only successes). Bot.consume has lag on the
+	// server and re-firing within 5s would just fail. We update lastEatAt
+	// on EVERY dispatch so a failed attempt also respects the cooldown.
 	const since = Date.now() - (ctx.lastEatAt ?? 0);
 	if (since < 5000) return { action: "noop" };
-
-	ctx.dispatch(
-		() => eatBestFood(ctx.bot),
-		"eat",
-		{
-			onComplete: (res) => {
-				if (res.ok) ctx.lastEatAt = Date.now();
-			},
-		},
-	);
+	ctx.lastEatAt = Date.now();
+	ctx.dispatch(() => eatBestFood(ctx.bot), "eat", {});
 	return { action: "dispatched", kind: "eat", label: `food=${s.food}` };
 }
 

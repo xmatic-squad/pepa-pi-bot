@@ -229,6 +229,72 @@ export const craftChestSkill = makeRecipeSkill({
 	needsTable: true,
 });
 
+// Bed: 3 wool of one colour + 3 planks → 1 bed of that colour. We look
+// for any colour we have ≥3 of, ditto planks, and craft that pairing.
+// All bed recipes require a crafting table.
+const BED_COLORS = [
+	"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink",
+	"gray", "light_gray", "cyan", "purple", "blue", "brown", "green",
+	"red", "black",
+];
+
+function countByName(bot, name) {
+	return bot.inventory.items().reduce((s, i) => (i.name === name ? s + i.count : s), 0);
+}
+
+function bedColorWeCanCraft(bot) {
+	// Need 3 wool of a single colour. (Mixed-colour wool can't combine.)
+	for (const c of BED_COLORS) {
+		if (countByName(bot, `${c}_wool`) >= 3) return c;
+	}
+	return null;
+}
+
+export const craftBedSkill = Object.freeze({
+	id: "craft.bed",
+	title: "Craft a bed",
+	timeoutMs: 30_000,
+	preconditions(ctx) {
+		if (!ctx?.bot) return { ok: false, code: "no_bot", detail: "bot missing" };
+		const color = bedColorWeCanCraft(ctx.bot);
+		if (!color) return { ok: false, code: "missing_material", detail: "need 3 wool of one colour" };
+		if (totalPlanks(ctx.bot) < 3) return { ok: false, code: "missing_material", detail: "need 3 planks" };
+		return { ok: true };
+	},
+	async execute(ctx) {
+		const bot = ctx.bot;
+		const color = bedColorWeCanCraft(bot);
+		const item = `${color}_bed`;
+		const tableRes = await placeCraftingTable(bot);
+		if (!tableRes.ok) {
+			const msg = String(tableRes.detail ?? "");
+			const code = msg.includes("timed out") ? "timeout" : "missing_table";
+			return { ok: false, code, detail: tableRes.detail, worldDelta: null };
+		}
+		const reg = bot?.registry;
+		const itemId = reg?.itemsByName?.[item]?.id;
+		if (itemId == null) {
+			return { ok: false, code: "unsupported_version", detail: `no ${item} in registry`, worldDelta: null };
+		}
+		const recipes = bot.recipesFor(itemId, null, 1, tableRes.block);
+		const recipe = recipes[0];
+		if (!recipe) {
+			return { ok: false, code: "no_recipe", detail: `no recipe for ${item}`, worldDelta: null };
+		}
+		try {
+			await withTimeout(bot.craft(recipe, 1, tableRes.block), 15_000, `craft(${item})`);
+			return { ok: true, code: "done", detail: { item }, worldDelta: { crafted: item } };
+		} catch (e) {
+			const msg = String(e?.message ?? "");
+			const code = msg.includes("timed out") ? "timeout" : "failed";
+			return { ok: false, code, detail: e.message, worldDelta: null };
+		}
+	},
+	validate(ctx, result) {
+		return result.ok && !!result.worldDelta?.crafted;
+	},
+});
+
 // Torch: 1 stick + 1 coal (or charcoal) → 4 torches. We accept either
 // fuel via precondition shortcut: if no coal AND no charcoal, fail with
 // missing_material so the curriculum surfaces the blocker rather than

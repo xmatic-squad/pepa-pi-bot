@@ -5,6 +5,12 @@
 
 import pathfinderPkg from "mineflayer-pathfinder";
 const { pathfinder, goals, Movements } = pathfinderPkg;
+import collectBlockPkg from "mineflayer-collectblock";
+const collectBlockPlugin =
+	collectBlockPkg.plugin ??
+	collectBlockPkg.default?.plugin ??
+	collectBlockPkg.default ??
+	collectBlockPkg;
 
 import { info, warn } from "./log.js";
 
@@ -27,6 +33,19 @@ function ensurePathfinder(bot) {
 	if (pluginLoaded.has(bot)) return;
 	bot.loadPlugin(pathfinder);
 	pluginLoaded.add(bot);
+}
+
+// collectblock handles the full "find → approach → reposition → dig →
+// pickup" cycle which raw bot.dig + pathfinder.goto does not. The old
+// chop primitive "clicked once and stopped" because bot.dig requires a
+// stable LoS that GoalGetToBlock doesn't always satisfy — bot ended up
+// in leaves above the log and swung once with no progress.
+let collectBlockLoaded = new WeakSet();
+function ensureCollectBlock(bot) {
+	ensurePathfinder(bot);
+	if (collectBlockLoaded.has(bot)) return;
+	bot.loadPlugin(collectBlockPlugin);
+	collectBlockLoaded.add(bot);
 }
 
 // Each action that uses pathfinder should set its own Movements profile
@@ -203,11 +222,18 @@ const BED_NAMES = [
 	"black_bed",
 ];
 
+function carriedBedItem(bot) {
+	for (const item of bot.inventory.items()) {
+		if (BED_NAMES.includes(item.name)) return item;
+	}
+	return null;
+}
+
 export async function sleepInBed(bot) {
 	// Already in a bed?
 	if (bot.isSleeping) return { ok: true, detail: "already sleeping" };
 
-	// Find a nearby placed bed first.
+	// 1. Find a nearby placed bed first.
 	const bedBlock = bot.findBlock({
 		matching: (b) => BED_NAMES.includes(b?.name),
 		maxDistance: 16,
@@ -231,10 +257,46 @@ export async function sleepInBed(bot) {
 		}
 	}
 
-	// No placed bed — try placing one if we carry one. Skip — we don't want to
-	// invent a base location accidentally. Future: only place when at our base
-	// per locations.json.
-	return { ok: false, detail: "no bed in range and won't place blindly" };
+	// 2. No placed bed — if we're carrying one, place it right next to us
+	// and sleep on it. This is critical so the bot stops blocking player
+	// night-skipping the moment it owns a bed. We pick a footing block at
+	// the bot's feet level + 1 in the +X direction.
+	const carried = carriedBedItem(bot);
+	if (carried) {
+		const here = bot.entity.position;
+		const referenceBlock = bot.blockAt(here.offset(1, -1, 0));
+		const targetSlot = bot.blockAt(here.offset(1, 0, 0));
+		if (!referenceBlock || !referenceBlock.boundingBox || referenceBlock.boundingBox === "empty") {
+			return { ok: false, detail: "no solid ground to place bed on" };
+		}
+		if (targetSlot && targetSlot.boundingBox && targetSlot.boundingBox !== "empty") {
+			return { ok: false, detail: "no space to place bed" };
+		}
+		try {
+			await withTimeout(bot.equip(carried, "hand"), 3000, "equip bed");
+			await withTimeout(
+				bot.placeBlock(referenceBlock, { x: 0, y: 1, z: 0 }),
+				5000,
+				"placeBlock(bed)",
+			);
+			info("action", `sleep: placed ${carried.name} at ${referenceBlock.position.x + 0},${referenceBlock.position.y + 1},${referenceBlock.position.z + 0}`);
+			// Re-scan for the placed bed (its block name may differ from the
+			// item name slightly, e.g. on some servers, and the placement may
+			// have shifted to an adjacent slot for the bed's second half).
+			const placed = bot.findBlock({
+				matching: (b) => BED_NAMES.includes(b?.name),
+				maxDistance: 4,
+			});
+			if (!placed) return { ok: false, detail: "placed bed not found after placement" };
+			await withTimeout(bot.sleep(placed), 10_000, "bot.sleep(placed)");
+			return { ok: true, detail: { bedAt: placed.position, placed: true, name: carried.name } };
+		} catch (e) {
+			warn("action", `sleep place+sleep failed: ${e.message}`);
+			return { ok: false, detail: e.message };
+		}
+	}
+
+	return { ok: false, detail: "no bed in inventory or nearby" };
 }
 
 // ---- gathering -------------------------------------------------------------
@@ -306,7 +368,7 @@ export async function chopNearestTree(bot) {
 	});
 	if (!log) return { ok: false, detail: "no reachable log within 32 blocks" };
 
-	ensurePathfinder(bot);
+	ensureCollectBlock(bot);
 	setMovementsForGather(bot);
 	const axe = await equipBestAxe(bot);
 	info(
@@ -314,15 +376,7 @@ export async function chopNearestTree(bot) {
 		`chop: ${log.name} at ${log.position.x},${log.position.y},${log.position.z} (tool=${axe ?? "fists"})`,
 	);
 	try {
-		await withTimeout(
-			bot.pathfinder.goto(new goals.GoalGetToBlock(log.position.x, log.position.y, log.position.z)),
-			45_000,
-			"pathToLog",
-		);
-		await withTimeout(bot.dig(log), 30_000, "digLog");
-		// Walk over the dropped item briefly (collectblock plugin would do this
-		// for us, but a simple sleep-then-resume is enough for now).
-		await new Promise((r) => setTimeout(r, 1200));
+		await withTimeout(bot.collectBlock.collect(log), 60_000, "collectLog");
 		return { ok: true, detail: { logType: log.name, at: log.position } };
 	} catch (e) {
 		warn("action", `chop failed: ${e.message}`);

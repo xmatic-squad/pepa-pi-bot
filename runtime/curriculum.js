@@ -37,6 +37,31 @@ function totalCobble(inv) {
 	return (inv?.cobblestone ?? 0) + (inv?.cobbled_deepslate ?? 0);
 }
 
+const BED_COLORS = [
+	"white", "orange", "magenta", "light_blue", "yellow", "lime", "pink",
+	"gray", "light_gray", "cyan", "purple", "blue", "brown", "green",
+	"red", "black",
+];
+
+function hasAnyBed(inv) {
+	return BED_COLORS.some((c) => (inv?.[`${c}_bed`] ?? 0) > 0);
+}
+
+function totalWool(inv) {
+	return Object.entries(inv ?? {})
+		.filter(([k]) => k.endsWith("_wool"))
+		.reduce((s, [, n]) => s + n, 0);
+}
+
+function maxSingleColourWool(inv) {
+	let best = 0;
+	for (const c of BED_COLORS) {
+		const n = inv?.[`${c}_wool`] ?? 0;
+		if (n > best) best = n;
+	}
+	return best;
+}
+
 function has(inv, name, n = 1) {
 	return (inv?.[name] ?? 0) >= n;
 }
@@ -89,6 +114,22 @@ const MILESTONES = [
 			return null;
 		},
 	},
+	// EARLY — before stone-tier work — get a bed so the bot can sleep at
+	// night and stop blocking other players from skipping night. Three
+	// substeps: (1) gather 3 wool of one colour, (2) craft.bed, (3) sleep
+	// in/on it (handled by the sleep reflex, which now places a carried
+	// bed). We use total wool ≥ 3 as the "have enough wool" proxy; the
+	// craft.bed skill itself enforces same-colour-wool requirement.
+	{
+		id: "survive.bed",
+		title: "Have a bed (sleep through the night)",
+		isDone: (inv) => hasAnyBed(inv) || hasStoneTier(inv) && totalCobble(inv) > 0, // either we have a bed, or we're already deep into stone tier (rare path where wool wasn't accessible)
+		suggest: (inv) => {
+			// Need same-colour wool stack of ≥3
+			if (maxSingleColourWool(inv) < 3) return { skillId: "gather.wool" };
+			return { skillId: "craft.bed" };
+		},
+	},
 	{
 		id: "stone.32",
 		title: "Gather 32 cobblestone",
@@ -139,6 +180,12 @@ const MILESTONES = [
 		// `snapshot.locations?.base` is filled by bot.js.
 		isDone: (_inv, snap) => !!snap?.locations?.base,
 		suggest: () => ({ skillId: "village.choose-base" }),
+	},
+	{
+		id: "village.shelter",
+		title: "Build a tiny shelter at the base",
+		isDone: (_inv, snap) => !!snap?.locations?.shelter,
+		suggest: () => ({ skillId: "village.build-shelter" }),
 	},
 ];
 

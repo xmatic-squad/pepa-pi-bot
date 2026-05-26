@@ -639,6 +639,17 @@ function tick() {
 		lastSnapshot.busy = reflexCtx.busy
 			? { label: reflexCtx.currentActionLabel ?? "?" }
 			: null;
+		// Curriculum + locations MUST be computed BEFORE runTick so the
+		// curriculum reflex sees the suggested skill in snapshot.curriculum.
+		// (Pre-2026-05-26 they were computed after — every tick fell through
+		// to the wander fallback because plan.skillId was undefined.)
+		try {
+			lastSnapshot.locations = listLocations();
+		} catch {
+			lastSnapshot.locations = {};
+		}
+		const curriculumEarly = nextCurriculumMilestone(lastSnapshot);
+		lastSnapshot.curriculum = curriculumEarly;
 		reflexCtx.snapshot = lastSnapshot;
 		if (!reflexPaused) {
 			const result = runTick(reflexCtx);
@@ -676,20 +687,9 @@ function tick() {
 		lastSnapshot.activeSkill = reflexCtx.busy
 			? reflexCtx.currentActionLabel
 			: reflexCtx.lastReflex?.label ?? null;
-		// Two sources of "next milestone":
-		//   - planner.md (LLM-written, free-form, advisory)
-		//   - curriculum.js (deterministic early-game progression)
-		// The TUI prefers the curriculum's structured milestone (it has a
-		// suggested skill); falls back to the planner line for late-game.
-		// locations.json drives the village.* milestones — read each tick
-		// (cheap: a small JSON file, no parse on cold cache).
-		try {
-			lastSnapshot.locations = listLocations();
-		} catch {
-			lastSnapshot.locations = {};
-		}
-		const curriculum = nextCurriculumMilestone(lastSnapshot);
-		lastSnapshot.curriculum = curriculum;
+		// Curriculum + locations were already computed before runTick (above).
+		// Re-stamp the title here so observability fields stay together.
+		const curriculum = lastSnapshot.curriculum;
 		lastSnapshot.currentMilestone = curriculum?.milestone?.title ?? cachedMilestone;
 		lastSnapshot.lastResult = lastResult;
 		lastSnapshot.noProgressReason = noProgressReason;

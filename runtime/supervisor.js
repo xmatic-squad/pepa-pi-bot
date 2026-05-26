@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { stateDir } from "./config.js";
+import { isWatchableJs } from "./watch-filter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -124,32 +125,40 @@ function spawnChild() {
 	child.on("exit", (code, signal) => {
 		console.log(`[supervisor] child exited code=${code} signal=${signal}`);
 		const wantsRestart = code === RELOAD_EXIT_CODE || restartingDueToWatch;
+		// Capture BEFORE clearing — watch-triggered restarts are intentional
+		// and must not be counted toward the crash-loop rollback threshold.
+		const isWatchRestart = restartingDueToWatch;
 		restartingDueToWatch = false;
 		if (!wantsRestart) {
 			// Clean exit (SIGINT/SIGTERM bubble) or crash — don't relaunch.
 			process.exit(code ?? 0);
 		}
-		// Rate-limit restarts so a crash loop doesn't burn CPU.
-		const now = nowMs();
-		restartTimestamps.push(now);
-		while (restartTimestamps.length && now - restartTimestamps[0] > 60_000) restartTimestamps.shift();
-		if (restartTimestamps.length > MAX_RESTARTS_PER_MINUTE) {
-			// Crash loop. If the last commit is young AND touched runtime/, it
-			// probably broke us — roll it back and try once more.
-			const ageMs = lastCommitAgeMs();
-			if (
-				ageMs < ROLLBACK_FRESHNESS_MS &&
-				lastCommitTouchedRuntime() &&
-				rollbackCount < MAX_ROLLBACKS &&
-				rollbackLastCommit()
-			) {
-				console.log(`[supervisor] auto-rollback ${rollbackCount}/${MAX_ROLLBACKS} applied; restart counters reset`);
-				restartTimestamps.length = 0;
-				setTimeout(spawnChild, 500);
-				return;
+		// Rate-limit restarts so a crash loop doesn't burn CPU. Watch-triggered
+		// restarts don't count — burned a working main once (2026-05-26) when
+		// edits to runtime/*.test.js looked like a crash loop and rolled back
+		// the scheduler PR.
+		if (!isWatchRestart) {
+			const now = nowMs();
+			restartTimestamps.push(now);
+			while (restartTimestamps.length && now - restartTimestamps[0] > 60_000) restartTimestamps.shift();
+			if (restartTimestamps.length > MAX_RESTARTS_PER_MINUTE) {
+				// Crash loop. If the last commit is young AND touched runtime/, it
+				// probably broke us — roll it back and try once more.
+				const ageMs = lastCommitAgeMs();
+				if (
+					ageMs < ROLLBACK_FRESHNESS_MS &&
+					lastCommitTouchedRuntime() &&
+					rollbackCount < MAX_ROLLBACKS &&
+					rollbackLastCommit()
+				) {
+					console.log(`[supervisor] auto-rollback ${rollbackCount}/${MAX_ROLLBACKS} applied; restart counters reset`);
+					restartTimestamps.length = 0;
+					setTimeout(spawnChild, 500);
+					return;
+				}
+				console.error(`[supervisor] too many restarts (${restartTimestamps.length} in 60s) — giving up`);
+				process.exit(1);
 			}
-			console.error(`[supervisor] too many restarts (${restartTimestamps.length} in 60s) — giving up`);
-			process.exit(1);
 		}
 		console.log(`[supervisor] restarting in 500ms…`);
 		setTimeout(spawnChild, 500);
@@ -163,11 +172,11 @@ function spawnChild() {
 
 let debounceTimer = null;
 function watchRuntime() {
-	const watcher = fs.watch(RUNTIME_DIR, { recursive: false }, (eventType, filename) => {
-		if (!filename || !filename.endsWith(".js")) return;
-		// supervisor.js itself is excluded — restarting THIS process from
-		// inside itself would require a separate exec, which we don't do.
-		if (filename === "supervisor.js") return;
+	// recursive:true so edits to runtime/skills/*.js and runtime/social/*.js
+	// also restart the child. macOS + Linux support recursive fs.watch on
+	// Node 20+.
+	const watcher = fs.watch(RUNTIME_DIR, { recursive: true }, (eventType, filename) => {
+		if (!isWatchableJs(filename)) return;
 		if (debounceTimer) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
 			console.log(`[supervisor] ${filename} changed — restarting child`);

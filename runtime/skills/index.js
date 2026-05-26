@@ -26,7 +26,11 @@ import { skill as chopLogs } from "./chop-logs.js";
 import { skill as eat } from "./eat.js";
 import { skill as wander } from "./wander.js";
 import { skill as gatherStone } from "./gather-stone.js";
+import { skill as gatherWool } from "./gather-wool.js";
 import { skill as chooseBase } from "./choose-base.js";
+import { skill as buildShelter } from "./build-shelter.js";
+import { skill as depositSurplus } from "./deposit-surplus.js";
+import { skill as farmWheat } from "./farm-wheat.js";
 import {
 	craftPlanksSkill,
 	craftSticksSkill,
@@ -39,6 +43,7 @@ import {
 	craftFurnaceSkill,
 	craftChestSkill,
 	craftTorchSkill,
+	craftBedSkill,
 } from "./craft.js";
 
 const SKILLS = new Map();
@@ -56,7 +61,11 @@ register(chopLogs);
 register(eat);
 register(wander);
 register(gatherStone);
+register(gatherWool);
 register(chooseBase);
+register(buildShelter);
+register(depositSurplus);
+register(farmWheat);
 register(craftPlanksSkill);
 register(craftSticksSkill);
 register(craftWoodenAxeSkill);
@@ -68,6 +77,7 @@ register(craftStoneSwordSkill);
 register(craftFurnaceSkill);
 register(craftChestSkill);
 register(craftTorchSkill);
+register(craftBedSkill);
 
 export function listSkills() {
 	return Array.from(SKILLS.values()).map((s) => ({

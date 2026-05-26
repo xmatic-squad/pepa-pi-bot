@@ -4,6 +4,12 @@
 
 import pathfinderPkg from "mineflayer-pathfinder";
 const { pathfinder, goals, Movements } = pathfinderPkg;
+import collectBlockPkg from "mineflayer-collectblock";
+const collectBlockPlugin =
+	collectBlockPkg.plugin ??
+	collectBlockPkg.default?.plugin ??
+	collectBlockPkg.default ??
+	collectBlockPkg;
 
 import { pickaxes } from "./groups.js";
 import { info, warn } from "../log.js";
@@ -15,6 +21,14 @@ function ensurePathfinder(bot) {
 	if (pluginLoaded.has(bot)) return;
 	bot.loadPlugin(pathfinder);
 	pluginLoaded.add(bot);
+}
+
+let collectBlockLoaded = new WeakSet();
+function ensureCollectBlock(bot) {
+	ensurePathfinder(bot);
+	if (collectBlockLoaded.has(bot)) return;
+	bot.loadPlugin(collectBlockPlugin);
+	collectBlockLoaded.add(bot);
 }
 
 function setMovementsForGather(bot) {
@@ -91,18 +105,12 @@ export const skill = Object.freeze({
 			return { ok: false, code: "no_target", detail: "no reachable stone within 32 blocks", worldDelta: null };
 		}
 
-		ensurePathfinder(bot);
+		ensureCollectBlock(bot);
 		setMovementsForGather(bot);
 		const pickaxe = await equipBestPickaxe(bot);
 		info("action", `gather.stone: ${target.name} at ${target.position.x},${target.position.y},${target.position.z} (tool=${pickaxe ?? "fists"})`);
 		try {
-			await withTimeout(
-				bot.pathfinder.goto(new goals.GoalGetToBlock(target.position.x, target.position.y, target.position.z)),
-				45_000,
-				"pathToStone",
-			);
-			await withTimeout(bot.dig(target), 30_000, "digStone");
-			await new Promise((r) => setTimeout(r, 1200));
+			await withTimeout(bot.collectBlock.collect(target), 60_000, "collectStone");
 			return {
 				ok: true,
 				code: "done",
