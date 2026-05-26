@@ -73,18 +73,11 @@ export const skill = Object.freeze({
 		info("action", `explore.far: cardinal probe trials=${trials.map((t) => `${t.name}:${t.dist.toFixed(1)}`).join(" ")} best=${best.name}`);
 
 		if (best.dist < 0.5) {
-			// All cardinals blocked. Same wedged-jump as wander.
-			info("action", "explore.far: wedged — jump fallback");
-			try { await bot.look(best.yaw ?? 0, 0, true); } catch {}
-			bot.setControlState("forward", true);
-			bot.setControlState("jump", true);
-			try {
-				await new Promise((r) => setTimeout(r, 3_000));
-			} finally {
-				bot.setControlState("forward", false);
-				bot.setControlState("jump", false);
-			}
-			return { ok: true, code: "done", detail: { mode: "wedged-jump", trials }, worldDelta: { movedTo: null } };
+			// All cardinals blocked → escape pit: dig the block above the
+			// bot's head (if any), jump into the gap, repeat. Then break.
+			info("action", "explore.far: wedged — escape-pit (dig up + jump)");
+			await escapePit(bot, 3);
+			return { ok: true, code: "done", detail: { mode: "escape-pit", trials }, worldDelta: null };
 		}
 
 		const here = bot.entity.position.clone();
@@ -130,6 +123,32 @@ const CARDINAL_YAWS = [
 	{ name: "S", yaw: 0 },
 	{ name: "W", yaw: Math.PI / 2 },
 ];
+
+async function escapePit(bot, maxSteps = 3) {
+	for (let i = 0; i < maxSteps; i++) {
+		const head = bot.entity.position.offset(0, 1.7, 0);
+		const above = bot.blockAt(head.offset(0, 0.5, 0));
+		if (!above || above.name === "air" || above.name === "cave_air") {
+			bot.setControlState("jump", true);
+			bot.setControlState("forward", true);
+			await new Promise((r) => setTimeout(r, 700));
+			bot.setControlState("jump", false);
+			bot.setControlState("forward", false);
+			continue;
+		}
+		try { await withTimeout(bot.lookAt(above.position.offset(0.5, 0.5, 0.5), true), 1_500, "lookAt-up"); } catch {}
+		try {
+			await withTimeout(bot.dig(above), 8_000, "dig-up");
+		} catch (e) {
+			warn("action", `escape-pit dig-up failed: ${e.message}`);
+			break;
+		}
+		bot.setControlState("jump", true);
+		await new Promise((r) => setTimeout(r, 600));
+		bot.setControlState("jump", false);
+		await new Promise((r) => setTimeout(r, 400));
+	}
+}
 
 async function probeCardinalStep(bot, durationMs = 800) {
 	const trials = [];

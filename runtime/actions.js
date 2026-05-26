@@ -426,23 +426,13 @@ export async function wander(bot, radius = 12) {
 	const trials = await probeCardinalSteps(bot, 800);
 	const best = trials.reduce((b, t) => (t.dist > b.dist ? t : b), { dist: 0 });
 
-	// If nothing moved at all, the bot is wedged in all four cardinal
-	// directions (corner of a corridor, surrounded by leaves, hole). Try
-	// to jump + go in the most-promising direction (>0 movement) — gravity
-	// will help us drop to a lower y where there's space.
+	// If nothing moved at all, the bot is wedged — pit, corridor corner,
+	// surrounded by leaves. Try to escape: dig the block straight above
+	// + jump, repeat up to 3 times, then try forward+jump.
 	if (best.dist < 0.5) {
-		const fallback = trials.reduce((b, t) => (t.dist > b.dist ? t : b), { dist: 0, yaw: 0 });
-		info("action", `wander: all cardinals blocked, jumping fallback yaw=${fallback.yaw?.toFixed?.(2)}`);
-		try { await bot.look(fallback.yaw ?? 0, 0, true); } catch {}
-		bot.setControlState("forward", true);
-		bot.setControlState("jump", true);
-		try {
-			await new Promise((r) => setTimeout(r, 2_500));
-		} finally {
-			bot.setControlState("forward", false);
-			bot.setControlState("jump", false);
-		}
-		return { ok: true, detail: { mode: "wedged-jump", trials } };
+		info("action", `wander: all cardinals blocked → escape-pit (dig up + jump)`);
+		await escapePit(bot, 3);
+		return { ok: true, detail: { mode: "escape-pit", trials } };
 	}
 
 	// Commit to best direction.
@@ -480,6 +470,43 @@ const CARDINAL_YAWS = [
 	{ name: "S", yaw: 0 },
 	{ name: "W", yaw: Math.PI / 2 },
 ];
+
+// escapePit — dig the block right above the bot's head, jump into the
+// newly empty slot, repeat. Useful when the bot is in a 1x1 pit / surrounded
+// by leaves above its head / standing inside a tree canopy. We use bot.dig
+// directly (not collectBlock) because we don't care about pickup here.
+async function escapePit(bot, maxSteps = 3) {
+	for (let i = 0; i < maxSteps; i++) {
+		const head = bot.entity.position.offset(0, 1.7, 0);
+		const above = bot.blockAt(head.offset(0, 0.5, 0));
+		if (!above || above.name === "air" || above.name === "cave_air") {
+			// Already clear above. Just jump+forward in case bot is in a
+			// horizontal pit (gap in floor).
+			bot.setControlState("jump", true);
+			bot.setControlState("forward", true);
+			await new Promise((r) => setTimeout(r, 700));
+			bot.setControlState("jump", false);
+			bot.setControlState("forward", false);
+			continue;
+		}
+		// Try to break the block above us. Force lookAt + 1-tick wait so the
+		// server accepts the dig packet on protocol 775.
+		try {
+			await withTimeout(bot.lookAt(above.position.offset(0.5, 0.5, 0.5), true), 1_500, "lookAt-up");
+		} catch {}
+		try {
+			await withTimeout(bot.dig(above), 8_000, "dig-up");
+		} catch (e) {
+			warn("action", `escape-pit dig-up failed: ${e.message}`);
+			break;
+		}
+		// jump into the now-empty slot
+		bot.setControlState("jump", true);
+		await new Promise((r) => setTimeout(r, 600));
+		bot.setControlState("jump", false);
+		await new Promise((r) => setTimeout(r, 400));
+	}
+}
 
 async function probeCardinalSteps(bot, durationMs = 800) {
 	const trials = [];
