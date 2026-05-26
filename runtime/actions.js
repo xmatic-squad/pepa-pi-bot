@@ -637,6 +637,30 @@ function summarizeInv(bot) {
 		.join(",");
 }
 
+function isSolidPlacementSupport(block) {
+	return !!block && block.boundingBox && block.boundingBox !== "empty" && !block.liquid;
+}
+
+function isClearPlacementTarget(block) {
+	return !!block && block.boundingBox === "empty" && !block.liquid;
+}
+
+function findAdjacentTablePlacement(bot) {
+	const here = bot.entity.position;
+	const offsets = [
+		[1, 0], [-1, 0], [0, 1], [0, -1],
+		[1, 1], [1, -1], [-1, 1], [-1, -1],
+	];
+	for (const [dx, dz] of offsets) {
+		const referenceBlock = bot.blockAt(here.offset(dx, -1, dz));
+		const targetBlock = bot.blockAt(here.offset(dx, 0, dz));
+		if (isSolidPlacementSupport(referenceBlock) && isClearPlacementTarget(targetBlock)) {
+			return { referenceBlock, faceVector: { x: 0, y: 1, z: 0 }, target: targetBlock.position };
+		}
+	}
+	return null;
+}
+
 // Convert any wood logs into planks (4 planks per log). Picks the first log
 // type we have. Most recipes don't need a table.
 export async function craftPlanks(bot, count = 4) {
@@ -661,6 +685,12 @@ export async function placeCraftingTable(bot) {
 	const existing = findNearestBlockByName(bot, ["crafting_table"], { maxDistance: 4 });
 	if (existing) return { ok: true, detail: { at: existing.position, reused: true }, block: existing };
 
+	// Pick an adjacent placement target before crafting one. The old fallback
+	// clicked the block directly beneath the bot, which attempts to place the
+	// table in the bot's own feet block and can hang on Paper/ViaBackwards.
+	const placement = findAdjacentTablePlacement(bot);
+	if (!placement) return { ok: false, detail: "no clear adjacent block to place crafting table" };
+
 	// Need to craft one first if we don't have it.
 	if (getItemCount(bot, "crafting_table") === 0) {
 		if (getAnyPlanksCount(bot) < 4) {
@@ -670,25 +700,28 @@ export async function placeCraftingTable(bot) {
 		if (!craftRes.ok) return craftRes;
 	}
 
-	// Pick a placement target — block beside the bot at foot level + 1 face.
-	const here = bot.entity.position;
-	const referenceBlock = bot.blockAt(here.offset(0, -1, 0));
-	if (!referenceBlock) return { ok: false, detail: "no reference block beneath bot" };
-
 	const tableItem = bot.inventory.items().find((i) => i.name === "crafting_table");
+	if (!tableItem) return { ok: false, detail: "crafting_table missing after craft" };
 	try {
 		await withTimeout(bot.equip(tableItem, "hand"), 3000, "equip table");
+		try {
+			await withTimeout(bot.lookAt(placement.referenceBlock.position.offset(0.5, 0.5, 0.5), true), 2000, "lookAt(table spot)");
+		} catch {}
 		await withTimeout(
-			bot.placeBlock(referenceBlock, { x: 0, y: 1, z: 0 }),
+			bot.placeBlock(placement.referenceBlock, placement.faceVector),
 			5000,
 			"placeBlock(table)",
 		);
 	} catch (e) {
 		return { ok: false, detail: `place table: ${e.message}` };
 	}
-	const placed = findNearestBlockByName(bot, ["crafting_table"], { maxDistance: 4 });
-	info("action", `craft: placed crafting_table at ${placed?.position}`);
-	return { ok: true, detail: { at: placed?.position, reused: false }, block: placed };
+	const placedAtTarget = bot.blockAt(placement.target);
+	const placed = placedAtTarget?.name === "crafting_table"
+		? placedAtTarget
+		: findNearestBlockByName(bot, ["crafting_table"], { maxDistance: 4 });
+	if (!placed) return { ok: false, detail: "placed crafting table not found" };
+	info("action", `craft: placed crafting_table at ${placed.position.x},${placed.position.y},${placed.position.z}`);
+	return { ok: true, detail: { at: placed.position, reused: false }, block: placed };
 }
 
 export async function craftWoodenAxe(bot) {
