@@ -139,6 +139,32 @@ test("defend flees after a verified attack leaves hostile in reach", () => {
 	assert.equal(dispatches[1].label, "flee from zombie");
 });
 
+test("defend flees after repeated attack successes still leave hostile in reach", () => {
+	const bot = makeCombatBot();
+	const { ctx, dispatches } = makeCtx({
+		bot,
+		snapshot: {
+			connected: true,
+			health: 20,
+			closestHostile: { name: "zombie", distance: 3 },
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+
+	const first = runTick(ctx);
+	assert.equal(first.kind, "defend-attack");
+	dispatches[0].opts.onComplete({ ok: true, code: "done" });
+
+	const second = runTick(ctx);
+	assert.equal(second.kind, "defend-attack");
+	dispatches[1].opts.onComplete({ ok: true, code: "done" });
+
+	const third = runTick(ctx);
+	assert.equal(third.reflex, "defend");
+	assert.equal(third.kind, "defend-flee");
+	assert.equal(dispatches[2].label, "flee from zombie");
+});
+
 test("eat wins over curriculum when food low and bot has food in inventory", () => {
 	const { ctx, dispatches } = makeCtx({
 		snapshot: {

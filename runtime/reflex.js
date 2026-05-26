@@ -41,6 +41,7 @@ const DEFEND_ATTACK_MAX_SWINGS = 5;
 const DEFEND_ATTACK_SETTLE_MS = 650;
 const DEFEND_CLEAR_RADIUS = 4.5;
 const DEFEND_STUCK_WINDOW_MS = 20_000;
+const DEFEND_REPEAT_OK_RETREAT_COUNT = 2;
 
 // A reflex returns one of:
 //   { action: "noop" }                       — nothing to do
@@ -118,13 +119,19 @@ async function attackNearestUntilClear(bot, hostileName, opts = {}) {
 }
 
 function rememberDefendAttack(ctx, hostileName, res) {
+	const now = Date.now();
 	if (res?.ok) {
+		const prev = ctx.defendAttackCleared;
+		const count = prev?.name === hostileName && now - prev.ts < DEFEND_STUCK_WINDOW_MS
+			? prev.count + 1
+			: 1;
+		ctx.defendAttackCleared = { name: hostileName, count, ts: now };
 		if (ctx.defendAttackStuck?.name === hostileName) ctx.defendAttackStuck = null;
 		return;
 	}
+	ctx.defendAttackCleared = null;
 	if (res?.code !== "hostile_still_near") return;
 	const prev = ctx.defendAttackStuck;
-	const now = Date.now();
 	const count = prev?.name === hostileName && now - prev.ts < DEFEND_STUCK_WINDOW_MS
 		? prev.count + 1
 		: 1;
@@ -135,6 +142,12 @@ function shouldRetreatFromStuckAttack(ctx, hostileName) {
 	const stuck = ctx.defendAttackStuck;
 	if (!stuck || stuck.name !== hostileName) return false;
 	return stuck.count >= 1 && Date.now() - stuck.ts < DEFEND_STUCK_WINDOW_MS;
+}
+
+function shouldRetreatFromRepeatedClear(ctx, hostileName) {
+	const cleared = ctx.defendAttackCleared;
+	if (!cleared || cleared.name !== hostileName) return false;
+	return cleared.count >= DEFEND_REPEAT_OK_RETREAT_COUNT && Date.now() - cleared.ts < DEFEND_STUCK_WINDOW_MS;
 }
 
 function matchingHostileEntity(ctx, hostileName, dist) {
@@ -179,6 +192,10 @@ function defendReflex(ctx) {
 	// Anything beyond 8m with full HP is ignored regardless of how many
 	// hostiles the perceive snapshot enumerates.
 	if (dist <= 4) {
+		if (shouldRetreatFromRepeatedClear(ctx, hostile.name)) {
+			ctx.defendAttackCleared = null;
+			return dispatchDefendFlee(ctx, hostile, dist, { ignoreCooldown: true });
+		}
 		if (shouldRetreatFromStuckAttack(ctx, hostile.name)) {
 			ctx.defendAttackStuck = null;
 			return dispatchDefendFlee(ctx, hostile, dist, { ignoreCooldown: true });
