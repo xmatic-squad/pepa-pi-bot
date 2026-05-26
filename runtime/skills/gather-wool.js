@@ -9,10 +9,18 @@
 
 import collectBlockPkg from "mineflayer-collectblock";
 import pathfinderPkg from "mineflayer-pathfinder";
+import toolPkg from "mineflayer-tool";
+const toolPlugin = toolPkg.plugin ?? toolPkg.default?.plugin ?? toolPkg.default ?? toolPkg;
 
 import { info, warn } from "../log.js";
+import { findNearestBlockByName } from "../perception.js";
 
 const { pathfinder, goals, Movements } = pathfinderPkg;
+const WOOL_NAMES = [
+	"white_wool", "orange_wool", "magenta_wool", "light_blue_wool", "yellow_wool",
+	"lime_wool", "pink_wool", "gray_wool", "light_gray_wool", "cyan_wool",
+	"purple_wool", "blue_wool", "brown_wool", "green_wool", "red_wool", "black_wool",
+];
 const collectBlockPlugin =
 	collectBlockPkg.plugin ??
 	collectBlockPkg.default?.plugin ??
@@ -25,6 +33,7 @@ let pluginLoaded = new WeakSet();
 function ensurePlugins(bot) {
 	if (pluginLoaded.has(bot)) return;
 	bot.loadPlugin(pathfinder);
+	bot.loadPlugin(toolPlugin); // collectblock needs bot.tool
 	bot.loadPlugin(collectBlockPlugin);
 	pluginLoaded.add(bot);
 }
@@ -77,11 +86,8 @@ export const skill = Object.freeze({
 		ensurePlugins(bot);
 		setMovementsForGather(bot);
 
-		// 1. Placed wool block?
-		const woolBlock = bot.findBlock({
-			matching: (b) => b?.name && (b.name.endsWith("_wool") || b.name === "wool"),
-			maxDistance: 32,
-		});
+		// 1. Placed wool block? Numeric-id search — see runtime/perception.js.
+		const woolBlock = findNearestBlockByName(bot, WOOL_NAMES, { maxDistance: 32 });
 		if (woolBlock) {
 			info("action", `gather.wool: mining ${woolBlock.name} at ${woolBlock.position}`);
 			try {

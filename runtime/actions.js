@@ -11,9 +11,12 @@ const collectBlockPlugin =
 	collectBlockPkg.default?.plugin ??
 	collectBlockPkg.default ??
 	collectBlockPkg;
+import toolPkg from "mineflayer-tool";
+const toolPlugin = toolPkg.plugin ?? toolPkg.default?.plugin ?? toolPkg.default ?? toolPkg;
 
 import { info, warn } from "./log.js";
 import { digEscapeTunnel } from "./skills/recovery-tunnel-out.js";
+import { findNearestBlockByName } from "./perception.js";
 
 // Hard timeout wrapper. Mineflayer goals (pathfinder, pvp targeting) can hang
 // when the goal is unreachable; without a ceiling the whole reflex chain stops.
@@ -41,9 +44,16 @@ function ensurePathfinder(bot) {
 // chop primitive "clicked once and stopped" because bot.dig requires a
 // stable LoS that GoalGetToBlock doesn't always satisfy — bot ended up
 // in leaves above the log and swung once with no progress.
+let toolLoaded = new WeakSet();
+function ensureTool(bot) {
+	if (toolLoaded.has(bot)) return;
+	bot.loadPlugin(toolPlugin);
+	toolLoaded.add(bot);
+}
 let collectBlockLoaded = new WeakSet();
 function ensureCollectBlock(bot) {
 	ensurePathfinder(bot);
+	ensureTool(bot); // collectblock requires bot.tool — see live error 2026-05-26
 	if (collectBlockLoaded.has(bot)) return;
 	bot.loadPlugin(collectBlockPlugin);
 	collectBlockLoaded.add(bot);
@@ -234,11 +244,8 @@ export async function sleepInBed(bot) {
 	// Already in a bed?
 	if (bot.isSleeping) return { ok: true, detail: "already sleeping" };
 
-	// 1. Find a nearby placed bed first.
-	const bedBlock = bot.findBlock({
-		matching: (b) => BED_NAMES.includes(b?.name),
-		maxDistance: 16,
-	});
+	// 1. Find a nearby placed bed first. Numeric-id search — see chopNearestTree.
+	const bedBlock = findNearestBlockByName(bot, BED_NAMES, { maxDistance: 16 });
 
 	if (bedBlock) {
 		info("action", `sleep: nearest bed at ${bedBlock.position.x},${bedBlock.position.y},${bedBlock.position.z}`);
@@ -284,10 +291,7 @@ export async function sleepInBed(bot) {
 			// Re-scan for the placed bed (its block name may differ from the
 			// item name slightly, e.g. on some servers, and the placement may
 			// have shifted to an adjacent slot for the bed's second half).
-			const placed = bot.findBlock({
-				matching: (b) => BED_NAMES.includes(b?.name),
-				maxDistance: 4,
-			});
+			const placed = findNearestBlockByName(bot, BED_NAMES, { maxDistance: 4 });
 			if (!placed) return { ok: false, detail: "placed bed not found after placement" };
 			await withTimeout(bot.sleep(placed), 10_000, "bot.sleep(placed)");
 			return { ok: true, detail: { bedAt: placed.position, placed: true, name: carried.name } };
@@ -356,20 +360,20 @@ function getBlacklist(bot) {
 
 export async function chopNearestTree(bot) {
 	const blacklist = getBlacklist(bot);
-	// findBlock invokes the matcher for blocks that pass the maxDistance
-	// pre-filter; in dense areas some have a synthetic shape with no
-	// `.position`. Guard or we crash before we even start pathfinding.
 	// Search radius widened to 64 (2026-05-26): live spawn at this server
 	// had no trees in 32-block radius and the bot looped wander→gather→
 	// fail forever. 64 ≈ one chunk in either direction.
+	//
+	// 2026-05-26 — bigger root-cause fix: stopped using bot.findBlock with
+	// a callback matcher. Under ViaBackwards the Block objects fed into
+	// the callback have wrong .name fields (mineflayer issue #2347), so
+	// LOG_NAMES.includes(b.name) was always false and gather.logs reported
+	// "no log within 64 blocks" while standing on dark_oak_leaves. We now
+	// search by numeric registry id and post-filter the blacklist.
 	const SEARCH_RADIUS = 64;
-	const log = bot.findBlock({
-		matching: (b) => {
-			if (!b || !b.position || !LOG_NAMES.includes(b.name)) return false;
-			const key = `${b.position.x},${b.position.y},${b.position.z}`;
-			return !blacklist.has(key);
-		},
+	const log = findNearestBlockByName(bot, LOG_NAMES, {
 		maxDistance: SEARCH_RADIUS,
+		predicate: (b) => !blacklist.has(`${b.position.x},${b.position.y},${b.position.z}`),
 	});
 	if (!log) return { ok: false, detail: `no reachable log within ${SEARCH_RADIUS} blocks` };
 
@@ -645,11 +649,8 @@ export async function craftSticks(bot, count = 4) {
 // Place a crafting table at the bot's feet+1 (or near). Returns the placed
 // block so subsequent craft calls can pass it as tableBlock.
 export async function placeCraftingTable(bot) {
-	// Already placed nearby?
-	const existing = bot.findBlock({
-		matching: (b) => b && b.name === "crafting_table",
-		maxDistance: 4,
-	});
+	// Already placed nearby? Numeric-id search — see chopNearestTree.
+	const existing = findNearestBlockByName(bot, ["crafting_table"], { maxDistance: 4 });
 	if (existing) return { ok: true, detail: { at: existing.position, reused: true }, block: existing };
 
 	// Need to craft one first if we don't have it.
@@ -677,10 +678,7 @@ export async function placeCraftingTable(bot) {
 	} catch (e) {
 		return { ok: false, detail: `place table: ${e.message}` };
 	}
-	const placed = bot.findBlock({
-		matching: (b) => b && b.name === "crafting_table",
-		maxDistance: 4,
-	});
+	const placed = findNearestBlockByName(bot, ["crafting_table"], { maxDistance: 4 });
 	info("action", `craft: placed crafting_table at ${placed?.position}`);
 	return { ok: true, detail: { at: placed?.position, reused: false }, block: placed };
 }

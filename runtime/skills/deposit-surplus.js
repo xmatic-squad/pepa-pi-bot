@@ -13,6 +13,9 @@ const { pathfinder, goals, Movements } = pathfinderPkg;
 
 import { applyProfile, PROFILES } from "../movement-profiles.js";
 import { info, warn } from "../log.js";
+import { findNearestBlockByName } from "../perception.js";
+
+const CHEST_NAMES = ["chest", "trapped_chest"];
 
 const KEEP_ALWAYS_NAME_RE = /(_axe|_pickaxe|_sword|_shovel|_hoe|_bed|bread|cooked_|apple|carrot|potato|wheat_seeds)$/;
 const STORABLE_NAME_RE = /(_log$|_stem$|cobblestone|cobbled_deepslate|deepslate|stone$|dirt|sand|gravel|wheat$|_planks$|stick$)/;
@@ -61,19 +64,13 @@ export const skill = Object.freeze({
 		if (!ctx?.bot) return { ok: false, code: "no_bot", detail: "bot missing" };
 		const surplus = pickSurplus(ctx.bot);
 		if (surplus.length === 0) return { ok: false, code: "nothing_to_deposit", detail: "no surplus stacks" };
-		const chest = ctx.bot.findBlock({
-			matching: (b) => b?.name === "chest" || b?.name === "trapped_chest",
-			maxDistance: 24,
-		});
+		const chest = findNearestBlockByName(ctx.bot, CHEST_NAMES, { maxDistance: 24 });
 		if (!chest) return { ok: false, code: "no_chest", detail: "no chest within 24 blocks" };
 		return { ok: true };
 	},
 	async execute(ctx) {
 		const bot = ctx.bot;
-		const chest = bot.findBlock({
-			matching: (b) => b?.name === "chest" || b?.name === "trapped_chest",
-			maxDistance: 24,
-		});
+		const chest = findNearestBlockByName(bot, CHEST_NAMES, { maxDistance: 24 });
 		if (!chest) return { ok: false, code: "no_chest", detail: "no chest after move", worldDelta: null };
 
 		ensurePathfinder(bot);

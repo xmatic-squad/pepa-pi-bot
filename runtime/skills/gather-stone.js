@@ -10,9 +10,12 @@ const collectBlockPlugin =
 	collectBlockPkg.default?.plugin ??
 	collectBlockPkg.default ??
 	collectBlockPkg;
+import toolPkg from "mineflayer-tool";
+const toolPlugin = toolPkg.plugin ?? toolPkg.default?.plugin ?? toolPkg.default ?? toolPkg;
 
 import { pickaxes } from "./groups.js";
 import { info, warn } from "../log.js";
+import { findNearestBlockByName } from "../perception.js";
 
 const STONE_NAMES = ["stone", "cobblestone", "deepslate", "cobbled_deepslate", "andesite", "diorite", "granite"];
 
@@ -23,9 +26,16 @@ function ensurePathfinder(bot) {
 	pluginLoaded.add(bot);
 }
 
+let toolLoaded = new WeakSet();
+function ensureTool(bot) {
+	if (toolLoaded.has(bot)) return;
+	bot.loadPlugin(toolPlugin);
+	toolLoaded.add(bot);
+}
 let collectBlockLoaded = new WeakSet();
 function ensureCollectBlock(bot) {
 	ensurePathfinder(bot);
+	ensureTool(bot);
 	if (collectBlockLoaded.has(bot)) return;
 	bot.loadPlugin(collectBlockPlugin);
 	collectBlockLoaded.add(bot);
@@ -93,13 +103,10 @@ export const skill = Object.freeze({
 	async execute(ctx) {
 		const bot = ctx.bot;
 		const blacklist = getBlacklist(bot);
-		const target = bot.findBlock({
-			matching: (b) => {
-				if (!b || !b.position || !STONE_NAMES.includes(b.name)) return false;
-				const key = `${b.position.x},${b.position.y},${b.position.z}`;
-				return !blacklist.has(key);
-			},
+		// Numeric-id search — callback matcher returns 0 under ViaBackwards. See runtime/perception.js.
+		const target = findNearestBlockByName(bot, STONE_NAMES, {
 			maxDistance: 32,
+			predicate: (b) => !blacklist.has(`${b.position.x},${b.position.y},${b.position.z}`),
 		});
 		if (!target) {
 			return { ok: false, code: "no_target", detail: "no reachable stone within 32 blocks", worldDelta: null };
