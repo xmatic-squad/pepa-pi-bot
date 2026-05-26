@@ -40,6 +40,7 @@ import { startPlanner, isPlannerBusy, readNextMilestone, planExists } from "./pl
 import { computeState, STATES } from "./state.js";
 import { createNoProgressDetector } from "./no-progress.js";
 import { maybeStartViewer } from "./viewer.js";
+import { createPathfinderWatchdog } from "./pathfinder-watchdog.js";
 import { nextMilestone as nextCurriculumMilestone } from "./curriculum.js";
 import { listLocations } from "./locations.js";
 import { runSkill } from "./skills/index.js";
@@ -66,6 +67,7 @@ const ESCALATE_AFTER_NOOPS = 20;
 const ESCALATION_COOLDOWN_MS = 10 * 60 * 1000;
 
 let bot = null;
+let pathWatchdog = null;
 let reflexPaused = false;
 let tickTimer = null;
 let reconnectTimer = null;
@@ -638,6 +640,12 @@ function connect() {
 		appendDiary(`spawned at ${bot.entity.position.x.toFixed(0)},${bot.entity.position.y.toFixed(0)},${bot.entity.position.z.toFixed(0)}`);
 		ipc?.broadcast(EVENT_TYPES.STATUS, buildSnapshot(bot));
 		maybeStartViewer(bot).catch((e) => warn("viewer", `start threw: ${e?.message ?? e}`));
+		// Pathfinder stuck-watchdog: replan when an obstacle appears mid-path
+		// (mineflayer-pathfinder doesn't recompute on world changes).
+		try {
+			pathWatchdog?.stop();
+			pathWatchdog = createPathfinderWatchdog(bot);
+		} catch (e) { warn("pathfinder", `watchdog start failed: ${e?.message ?? e}`); }
 	});
 
 	bot.on("messagestr", (text) => {
@@ -1033,6 +1041,8 @@ function gracefulExit(code) {
 	info("runtime", "shutting down");
 	if (tickTimer) clearInterval(tickTimer);
 	if (reconnectTimer) clearTimeout(reconnectTimer);
+	try { pathWatchdog?.stop(); } catch {}
+	pathWatchdog = null;
 	try {
 		bot?.quit("shutdown");
 	} catch {}
