@@ -21,6 +21,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseEditScope, validateChangedFiles, effectiveScope } from "./edit-scope.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -76,6 +78,13 @@ if (proposal.status === "pending") {
 
 const proposalText = fs.readFileSync(proposal.path, "utf8");
 
+// Each proposal may declare an editScope in its frontmatter so the patch is
+// kept to the specific module(s) the operator (or the stuck detector) marked
+// as relevant. Older proposals without editScope fall back to ["runtime/"],
+// matching the historical default.
+const scope = effectiveScope(parseEditScope(proposalText));
+log("info", `edit scope: ${JSON.stringify(scope)}`);
+
 // Capture current main HEAD so we can roll back to it if cherry-pick fails.
 const baseSha = git(["rev-parse", "HEAD"]).stdout.trim();
 
@@ -91,6 +100,7 @@ git(["branch", "-D", branch]); // ignore error if absent
 const checkout = git(["checkout", "-b", branch]);
 if (checkout.status !== 0) exit(2, `cannot create branch ${branch}: ${checkout.stderr}`);
 
+const scopeBullet = scope.map((p) => `   - \`${p}\``).join("\n");
 const prompt = [
 	"You are patching the pepa-pi-bot repo to address an automatically-detected failure.",
 	"This is an UNATTENDED run — no operator will review your output before it lands on main.",
@@ -102,12 +112,15 @@ const prompt = [
 	"",
 	"## Hard rules (non-negotiable)",
 	"",
-	"1. Touch only files under `runtime/`. Do NOT modify `tui/`, `extensions/`, `scripts/`, `docs/`, `package.json`, or anything in `state/`.",
-	"2. Do not introduce npm dependencies.",
-	"3. Do not push, do not open a PR. Commit on the current branch only.",
-	"4. Use a conventional commit message: `fix(runtime/<file>): <one-line summary>`.",
-	"5. If you can't safely fix the issue, write a short comment in the relevant runtime file explaining why and stop — do NOT make a speculative change.",
-	"6. Make exactly ONE commit. If you find multiple issues, focus on the one the proposal describes.",
+	"1. Touch ONLY files matching the edit scope below. Any other path will be rejected after you commit and the patch will be discarded:",
+	scopeBullet,
+	"2. You MAY add or update test files under `runtime/**/*.test.js` even if not listed above — tests for the fix are encouraged.",
+	"3. Do not introduce npm dependencies. Do not modify `package.json`, `tui/`, `extensions/`, `scripts/`, `docs/`, `.env`, or anything in `state/`.",
+	"4. Do not push, do not open a PR. Commit on the current branch only.",
+	"5. Use a conventional commit message: `fix(runtime/<file>): <one-line summary>`.",
+	"6. Run `npm test` mentally before committing — your patch must keep all existing tests green; the auto-patcher will run `npm test` and discard the patch if it fails.",
+	"7. If you can't safely fix the issue, write a short comment in the relevant runtime file explaining why and stop — do NOT make a speculative change.",
+	"8. Make exactly ONE commit. If you find multiple issues, focus on the one the proposal describes.",
 	"",
 	"After you commit, your job is done.",
 ].join("\n");
@@ -152,15 +165,38 @@ pi.on("exit", (code) => {
 		exit(1, "pi made no commit");
 	}
 
-	// Verify the commit touched only runtime/.
+	// Verify the commit only touched files inside the declared edit scope.
+	// Test files under runtime/**/*.test.js are always allowed — they're how
+	// Pi proves the fix is safe and how the smoke gate below checks pass.
 	const filesChanged = git(["diff", "--name-only", `${baseSha}..HEAD`]).stdout.trim().split("\n").filter(Boolean);
-	const outside = filesChanged.filter((f) => !f.startsWith("runtime/"));
-	if (outside.length > 0) {
-		log("error", `commit touched files outside runtime/: ${outside.join(", ")} — discarding`);
+	const testFiles = filesChanged.filter((f) => /^runtime\/.*\.test\.js$/.test(f));
+	const scopeWithTests = [...scope, ...testFiles];
+	const validation = validateChangedFiles(filesChanged, scopeWithTests);
+	if (!validation.ok) {
+		log("error", `commit touched files outside scope ${JSON.stringify(scope)}: ${validation.outsideFiles.join(", ")} — discarding`);
 		git(["checkout", "main"]);
 		git(["branch", "-D", branch]);
 		exit(2, "patch touched off-limits files");
 	}
+
+	// Smoke gate: run `npm test` on the patched branch BEFORE cherry-picking.
+	// Anything that turns the suite red gets thrown away — even if Pi thinks
+	// the change is correct.
+	log("info", "running npm test smoke gate (timeout 5 min)");
+	const smoke = spawnSync("npm", ["test"], {
+		cwd: REPO_ROOT,
+		encoding: "utf8",
+		env: { ...process.env, CI: "1" },
+		timeout: 5 * 60 * 1000,
+	});
+	if (smoke.status !== 0) {
+		const tail = ((smoke.stdout || "") + "\n" + (smoke.stderr || "")).split("\n").slice(-10).join("\n");
+		log("error", `npm test FAILED on patched branch — discarding\n${tail}`);
+		git(["checkout", "main"]);
+		git(["branch", "-D", branch]);
+		exit(2, "patch failed smoke (npm test)");
+	}
+	log("info", "smoke gate passed");
 
 	// Cherry-pick onto main.
 	git(["checkout", "main"]);
