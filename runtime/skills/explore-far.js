@@ -11,6 +11,7 @@ import pathfinderPkg from "mineflayer-pathfinder";
 const { pathfinder, goals, Movements } = pathfinderPkg;
 
 import { info, warn } from "../log.js";
+import { digEscapeTunnel } from "./recovery-tunnel-out.js";
 
 let pluginLoaded = new WeakSet();
 function ensurePathfinder(bot) {
@@ -89,11 +90,17 @@ export const skill = Object.freeze({
 		info("action", `explore.far: cardinal probe trials=${trials.map((t) => `${t.name}:${t.dist.toFixed(1)}`).join(" ")} best=${best.name}`);
 
 		if (best.dist < 0.5) {
-			// All cardinals blocked → escape pit: dig the block above the
-			// bot's head (if any), jump into the gap, repeat. Then break.
-			info("action", "explore.far: wedged — escape-pit (dig up + jump)");
-			await escapePit(bot, 3);
-			return { ok: true, code: "done", detail: { mode: "escape-pit", trials }, worldDelta: null };
+			// All cardinals blocked. Try the cheap vertical escape first; if it
+			// does not actually move us, carve a short horizontal tunnel. The
+			// previous code returned OK after dig-up+jump even when position was
+			// unchanged, causing repeated false "done" completions.
+			info("action", "explore.far: wedged — escape-pit, then tunnel-out if still stuck");
+			const escape = await escapePit(bot, 3);
+			const detail = { ...(escape.detail ?? {}), trials };
+			if (!escape.ok) {
+				return { ok: false, code: escape.code ?? "wedged", detail, worldDelta: escape.worldDelta ?? null };
+			}
+			return { ok: true, code: "done", detail, worldDelta: escape.worldDelta ?? null };
 		}
 
 		const here = bot.entity.position.clone();
@@ -140,11 +147,21 @@ const CARDINAL_YAWS = [
 	{ name: "W", yaw: Math.PI / 2 },
 ];
 
+function clonePos(pos) {
+	if (typeof pos?.clone === "function") return pos.clone();
+	return { x: pos?.x ?? 0, y: pos?.y ?? 0, z: pos?.z ?? 0 };
+}
+
+function movedDistance(a, b) {
+	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.y ?? 0) - (a?.y ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+}
+
 async function escapePit(bot, maxSteps = 3) {
+	const before = clonePos(bot.entity.position);
 	for (let i = 0; i < maxSteps; i++) {
 		const head = bot.entity.position.offset(0, 1.7, 0);
 		const above = bot.blockAt(head.offset(0, 0.5, 0));
-		if (!above || above.name === "air" || above.name === "cave_air") {
+		if (!above || above.name === "air" || above.name === "cave_air" || above.name === "void_air") {
 			bot.setControlState("jump", true);
 			bot.setControlState("forward", true);
 			await new Promise((r) => setTimeout(r, 700));
@@ -164,6 +181,18 @@ async function escapePit(bot, maxSteps = 3) {
 		bot.setControlState("jump", false);
 		await new Promise((r) => setTimeout(r, 400));
 	}
+
+	const moved = movedDistance(before, bot.entity.position);
+	if (moved >= 0.75) {
+		return {
+			ok: true,
+			code: "done",
+			detail: { mode: "escape-pit-up", moved },
+			worldDelta: { mode: "escape-pit-up", movedTo: clonePos(bot.entity.position) },
+		};
+	}
+	info("action", `escape-pit moved only ${moved.toFixed(2)} blocks → tunnel-out`);
+	return digEscapeTunnel(bot, { maxSteps: 3, reason: "explore.far escape-pit" });
 }
 
 async function probeCardinalStep(bot, durationMs = 800) {

@@ -13,6 +13,7 @@ const collectBlockPlugin =
 	collectBlockPkg;
 
 import { info, warn } from "./log.js";
+import { digEscapeTunnel } from "./skills/recovery-tunnel-out.js";
 
 // Hard timeout wrapper. Mineflayer goals (pathfinder, pvp targeting) can hang
 // when the goal is unreachable; without a ceiling the whole reflex chain stops.
@@ -430,9 +431,11 @@ export async function wander(bot, radius = 12) {
 	// surrounded by leaves. Try to escape: dig the block straight above
 	// + jump, repeat up to 3 times, then try forward+jump.
 	if (best.dist < 0.5) {
-		info("action", `wander: all cardinals blocked → escape-pit (dig up + jump)`);
-		await escapePit(bot, 3);
-		return { ok: true, detail: { mode: "escape-pit", trials } };
+		info("action", `wander: all cardinals blocked → escape-pit, then tunnel-out if still stuck`);
+		const escape = await escapePit(bot, 3);
+		const detail = { ...(escape.detail ?? {}), trials };
+		if (!escape.ok) return { ok: false, code: escape.code ?? "wedged", detail };
+		return { ok: true, detail };
 	}
 
 	// Commit to best direction.
@@ -472,14 +475,24 @@ const CARDINAL_YAWS = [
 ];
 
 // escapePit — dig the block right above the bot's head, jump into the
-// newly empty slot, repeat. Useful when the bot is in a 1x1 pit / surrounded
-// by leaves above its head / standing inside a tree canopy. We use bot.dig
-// directly (not collectBlock) because we don't care about pickup here.
+// newly empty slot, repeat. If that does not actually move the bot, fall
+// back to recovery.tunnel-out's two-high horizontal tunnel. Returning OK
+// without movement was what produced repeated wedged "done" results.
+function clonePos(pos) {
+	if (typeof pos?.clone === "function") return pos.clone();
+	return { x: pos?.x ?? 0, y: pos?.y ?? 0, z: pos?.z ?? 0 };
+}
+
+function movedDistance(a, b) {
+	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.y ?? 0) - (a?.y ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+}
+
 async function escapePit(bot, maxSteps = 3) {
+	const before = clonePos(bot.entity.position);
 	for (let i = 0; i < maxSteps; i++) {
 		const head = bot.entity.position.offset(0, 1.7, 0);
 		const above = bot.blockAt(head.offset(0, 0.5, 0));
-		if (!above || above.name === "air" || above.name === "cave_air") {
+		if (!above || above.name === "air" || above.name === "cave_air" || above.name === "void_air") {
 			// Already clear above. Just jump+forward in case bot is in a
 			// horizontal pit (gap in floor).
 			bot.setControlState("jump", true);
@@ -506,6 +519,13 @@ async function escapePit(bot, maxSteps = 3) {
 		bot.setControlState("jump", false);
 		await new Promise((r) => setTimeout(r, 400));
 	}
+
+	const moved = movedDistance(before, bot.entity.position);
+	if (moved >= 0.75) {
+		return { ok: true, code: "done", detail: { mode: "escape-pit-up", moved } };
+	}
+	info("action", `escape-pit moved only ${moved.toFixed(2)} blocks → tunnel-out`);
+	return digEscapeTunnel(bot, { maxSteps: 3, reason: "wander escape-pit" });
 }
 
 async function probeCardinalSteps(bot, durationMs = 800) {
