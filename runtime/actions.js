@@ -410,6 +410,14 @@ export async function chopNearestTree(bot) {
 		return { ok: true, detail: { logType: log.name, at: targetPos } };
 	} catch (e) {
 		warn("action", `chop failed: ${e.message}`);
+		// Promise.race timeouts do not cancel mineflayer-collectblock; an old
+		// collect task can keep owning pathfinder and make every retry time out.
+		try {
+			await withTimeout(bot.collectBlock?.cancelTask?.() ?? Promise.resolve(), 2_000, "cancelCollectLog");
+		} catch (cancelErr) {
+			warn("action", `chop cancel failed: ${cancelErr.message}`);
+			try { bot.pathfinder?.stop?.(); } catch {}
+		}
 		blacklist.set(key, Date.now() + BLACKLIST_TTL_MS);
 		return { ok: false, detail: e.message, blacklisted: targetPos };
 	}
