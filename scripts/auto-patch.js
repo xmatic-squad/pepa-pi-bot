@@ -26,6 +26,7 @@ import { parseEditScope, validateChangedFiles, effectiveScope } from "./edit-sco
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
+const LOCK_FILE = path.join(REPO_ROOT, "state", "auto-patch.lock");
 
 function log(level, msg) {
 	const line = `${new Date().toISOString()} [auto-patch] [${level}] ${msg}`;
@@ -37,8 +38,25 @@ function git(args, opts = {}) {
 	return spawnSync("git", args, { cwd: REPO_ROOT, encoding: "utf8", ...opts });
 }
 
+// Held while Pi is writing runtime/*.js so the supervisor's file watcher
+// doesn't kill the bot mid-write and reload a half-saved file with a
+// SyntaxError. See 2026-05-26 incident.
+function acquireLock() {
+	fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
+	fs.writeFileSync(LOCK_FILE, String(process.pid));
+}
+function releaseLock() {
+	try {
+		const pid = Number.parseInt(fs.readFileSync(LOCK_FILE, "utf8").trim(), 10);
+		if (pid === process.pid) fs.unlinkSync(LOCK_FILE);
+	} catch {}
+}
+process.on("exit", releaseLock);
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => { releaseLock(); process.exit(1); });
+
 function exit(code, reason) {
 	log(code === 0 ? "info" : "warn", `exit ${code}: ${reason}`);
+	releaseLock();
 	process.exit(code);
 }
 
@@ -99,6 +117,9 @@ git(["branch", "-D", branch]); // ignore error if absent
 
 const checkout = git(["checkout", "-b", branch]);
 if (checkout.status !== 0) exit(2, `cannot create branch ${branch}: ${checkout.stderr}`);
+
+acquireLock();
+log("info", `acquired ${LOCK_FILE}`);
 
 const scopeBullet = scope.map((p) => `   - \`${p}\``).join("\n");
 const prompt = [

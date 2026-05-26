@@ -28,6 +28,9 @@ const BOT_ENTRY = path.join(RUNTIME_DIR, "bot.js");
 export const RELOAD_EXIT_CODE = 42;
 const WATCH_DEBOUNCE_MS = 800;
 const MAX_RESTARTS_PER_MINUTE = 5;
+const AUTO_PATCH_LOCK = path.join(REPO_ROOT, "state", "auto-patch.lock");
+const LOCK_POLL_MS = 2_000;
+const LOCK_POST_GRACE_MS = 1_500;
 // When a recent auto-patch breaks the bot, we roll it back. "Recent" =
 // landed on main within the last ROLLBACK_FRESHNESS_MS. The signal is
 // MAX_RESTARTS_PER_MINUTE exceeded — i.e. the patch reliably crashes.
@@ -88,6 +91,25 @@ function isProcessAlive(pid) {
 	} catch (e) {
 		return e.code === "EPERM"; // exists but we don't own it
 	}
+}
+
+// True iff scripts/auto-patch.js is editing runtime/*.js right now. While the
+// lock is held, file-watch restarts are deferred — otherwise we kill the
+// child mid-write and load a half-saved file with a SyntaxError. Observed
+// 2026-05-26: Pi wrote a valid patch but the supervisor caught it between
+// two consecutive writes and crash-looped.
+function autoPatchLockHeld() {
+	try {
+		const pid = Number.parseInt(fs.readFileSync(AUTO_PATCH_LOCK, "utf8").trim(), 10);
+		return Number.isFinite(pid) && isProcessAlive(pid);
+	} catch {
+		return false;
+	}
+}
+
+function runtimeFileParses(absPath) {
+	const res = spawnSync(process.execPath, ["--check", absPath], { encoding: "utf8" });
+	return res.status === 0;
 }
 
 function acquireLock() {
@@ -171,18 +193,42 @@ function spawnChild() {
 }
 
 let debounceTimer = null;
+let pendingRestartFile = null;
+function scheduleRestart(filename) {
+	pendingRestartFile = filename;
+	if (debounceTimer) clearTimeout(debounceTimer);
+	debounceTimer = setTimeout(tryRestart, WATCH_DEBOUNCE_MS);
+}
+function tryRestart() {
+	const filename = pendingRestartFile;
+	if (!filename) return;
+	if (autoPatchLockHeld()) {
+		debounceTimer = setTimeout(tryRestart, LOCK_POLL_MS);
+		return;
+	}
+	// Lock just dropped (or was never held). Pause briefly to let any final
+	// write settle, then syntax-check the file before killing the child — a
+	// half-written file would crash-loop the bot.
+	debounceTimer = setTimeout(() => {
+		const abs = path.join(RUNTIME_DIR, filename);
+		if (fs.existsSync(abs) && !runtimeFileParses(abs)) {
+			console.log(`[supervisor] ${filename} has syntax errors — waiting`);
+			debounceTimer = setTimeout(tryRestart, LOCK_POLL_MS);
+			return;
+		}
+		pendingRestartFile = null;
+		console.log(`[supervisor] ${filename} changed — restarting child`);
+		restartingDueToWatch = true;
+		child?.kill("SIGTERM");
+	}, LOCK_POST_GRACE_MS);
+}
 function watchRuntime() {
 	// recursive:true so edits to runtime/skills/*.js and runtime/social/*.js
 	// also restart the child. macOS + Linux support recursive fs.watch on
 	// Node 20+.
 	const watcher = fs.watch(RUNTIME_DIR, { recursive: true }, (eventType, filename) => {
 		if (!isWatchableJs(filename)) return;
-		if (debounceTimer) clearTimeout(debounceTimer);
-		debounceTimer = setTimeout(() => {
-			console.log(`[supervisor] ${filename} changed — restarting child`);
-			restartingDueToWatch = true;
-			child?.kill("SIGTERM");
-		}, WATCH_DEBOUNCE_MS);
+		scheduleRestart(filename);
 	});
 	watcher.on("error", (err) => {
 		console.error(`[supervisor] watcher error: ${err.message}`);
