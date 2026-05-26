@@ -22,6 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseEditScope, validateChangedFiles, effectiveScope } from "./edit-scope.js";
+import { lintPatch } from "./lint-patch.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -121,6 +122,18 @@ if (checkout.status !== 0) exit(2, `cannot create branch ${branch}: ${checkout.s
 acquireLock();
 log("info", `acquired ${LOCK_FILE}`);
 
+// Pick top-k similar existing skills so Pi can crib patterns instead of
+// reinventing them (Mindcraft skill_library.getRelevantSkillDocs). Lazy
+// import — skill registry pulls in mineflayer transitively which is
+// expensive, and we don't need it on early-exit paths.
+let relevantDocsBlock = "_(skill library unavailable)_";
+try {
+	const { renderRelevantDocs } = await import("../runtime/skill-library.js");
+	relevantDocsBlock = renderRelevantDocs(proposalText, { k: 3 });
+} catch (e) {
+	log("warn", `skill-library render failed: ${e.message}`);
+}
+
 const scopeBullet = scope.map((p) => `   - \`${p}\``).join("\n");
 const prompt = [
 	"You are patching the pepa-pi-bot repo to address an automatically-detected failure.",
@@ -130,6 +143,10 @@ const prompt = [
 	"## The proposal",
 	"",
 	proposalText,
+	"",
+	"## Relevant existing skills (top-3 by word overlap — use these as patterns)",
+	"",
+	relevantDocsBlock,
 	"",
 	"## Hard rules (non-negotiable)",
 	"",
@@ -167,7 +184,7 @@ const timer = setTimeout(() => {
 	pi.kill("SIGTERM");
 }, PI_TIMEOUT_MS);
 
-pi.on("exit", (code) => {
+pi.on("exit", async (code) => {
 	clearTimeout(timer);
 	log("info", `pi exited code=${code}; stdout=${piStdout.length}B stderr=${piStderr.length}B`);
 
@@ -199,6 +216,19 @@ pi.on("exit", (code) => {
 		git(["branch", "-D", branch]);
 		exit(2, "patch touched off-limits files");
 	}
+
+	// Pre-flight lint gate (Mindcraft coder._lintCode pattern, scripts/lint-patch.js).
+	// Cheaper than npm test — catches parse errors, missing named imports,
+	// and runSkill(id) where id isn't in the registry. Seconds, not 30s.
+	log("info", "running lint pre-flight gate");
+	const lint = await lintPatch({ repoRoot: REPO_ROOT, changedFiles: filesChanged });
+	if (!lint.ok) {
+		log("error", `lint FAILED — discarding:\n${lint.errors.join("\n")}`);
+		git(["checkout", "main"]);
+		git(["branch", "-D", branch]);
+		exit(2, "patch failed lint");
+	}
+	log("info", "lint gate passed");
 
 	// Smoke gate: run `npm test` on the patched branch BEFORE cherry-picking.
 	// Anything that turns the suite red gets thrown away — even if Pi thinks

@@ -26,6 +26,7 @@ import {
 } from "./actions.js";
 import { runSkill, getSkill } from "./skills/index.js";
 import { situationHash } from "./scenario-memory.js";
+import { tickModes } from "./modes.js";
 
 // Each "wander hint" triggered by a skill returning no_target should take
 // the bot meaningfully further than 16 blocks — otherwise the curriculum
@@ -294,6 +295,23 @@ export function runTick(ctx) {
 	// Bot is in the middle of an async action — don't dispatch another.
 	if (ctx.busy) {
 		return { reflex: "busy", action: "skipped", label: ctx.currentActionLabel ?? "(?)" };
+	}
+	// Modes (Mindcraft-style priority chain) run BEFORE the legacy reflex
+	// chain. Any mode with interrupts:["all"] wins outright; ones that only
+	// interrupt the curriculum just steer us toward a particular skill via
+	// runSkill. The reflex chain stays as the fallback for things the modes
+	// don't cover yet.
+	const modeHit = tickModes(ctx);
+	if (modeHit?.action?.skillId) {
+		const fn = () => runSkill(modeHit.action.skillId, ctx, modeHit.action.args ?? {});
+		ctx.lastReflex = { name: `mode:${modeHit.mode}`, label: modeHit.action.skillId, ts: Date.now() };
+		return {
+			reflex: `mode:${modeHit.mode}`,
+			action: "dispatch",
+			label: modeHit.action.skillId,
+			fn,
+			detail: modeHit.detail,
+		};
 	}
 	for (const reflex of REFLEXES) {
 		let outcome;

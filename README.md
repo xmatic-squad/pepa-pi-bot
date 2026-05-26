@@ -1,8 +1,10 @@
 # pepa-pi-bot
 
-> A universal, autonomous, self-extending Minecraft player. Built on [Mineflayer](https://github.com/PrismarineJS/mineflayer) with a hybrid runtime: a fast script-driven reflex loop for the everyday, and headless [Pi](https://pi.dev) escalation for the hard bits. Works against **any** Minecraft Java server — vanilla, Paper, Spigot, Fabric, Forge, online-mode or cracked, modded or vanilla.
+> A universal, autonomous, **self-extending** Minecraft player. Built on [Mineflayer](https://github.com/PrismarineJS/mineflayer) with a hybrid runtime: a fast script-driven reflex loop for the everyday, headless [Pi](https://pi.dev) escalation for the hard bits, and a **git-as-evolution-substrate** loop where the bot writes its own new skills and cherry-picks them onto `main` after passing a real `npm test` smoke gate. Works against **any** Minecraft Java server — vanilla, Paper, Spigot, Fabric, Forge, online-mode or cracked, modded or vanilla.
 
-The bot is **not a finished application**. It is a seed: a Mineflayer body, a tiny reflex brain, and a hand-off to whatever Minecraft server you point it at. The bot is expected to grow its own toolset over time — writing new reflexes, installing skills, adapting its behaviour as it plays.
+The bot is **not a finished application**. It is a seed: a Mineflayer body, a tiny reflex brain, persistent memory (`world-journal`, `scenario-memory`), a Voyager-style critic + Mindcraft-style modes/skill-library, and a self-improvement loop. The bot is expected to grow its own toolset over time — writing new reflexes, installing skills, adapting its behaviour as it plays.
+
+**Related work**: conceptually close to [Voyager](https://github.com/MineDojo/Voyager) (NVIDIA, GPT-4) and [Mindcraft](https://github.com/mindcraft-bots/mindcraft) (multi-agent LLM framework). The differentiator is that pepa stores its growing skill library as **versioned source code on `main`**, not as JSON in RAM — every Pi-written skill goes through `git checkout -b → npm test → cherry-pick`, making the loop auditable and rollback-safe.
 
 The name `pepa-pi-bot` is just the project's name (`pepa` from the original test server, `pi` from the original runtime). The bot itself is server-agnostic.
 
@@ -31,8 +33,15 @@ Most Minecraft AI bots ship as monolithic projects: hard-coded actions, fixed pr
 ┌──────────────────────────────────────────────────────────┐
 │  runtime/bot.js — long-running Node daemon               │
 │  ├── Mineflayer client (MC TCP, AuthMe, chat, events)    │
-│  ├── Reflex loop (defend > eat > sleep > idle)           │
+│  ├── Modes chain (self_preservation > hunger > shelter)  │
+│  │   priority interrupts before curriculum dispatch      │
+│  ├── Reflex loop (defend > eat > sleep > curriculum)     │
 │  │   pure script — no LLM in the hot path                │
+│  ├── perception.js — numeric-id findBlocks (VB-safe)     │
+│  ├── world-journal + scenario-memory (persistent JSONL)  │
+│  ├── stuck-incident → critic (Pi) → proposal             │
+│  ├── auto-improve → auto-patch → npm test → cherry-pick  │
+│  ├── social/conversation — file-JSONL multi-agent topics │
 │  └── pi-bridge — spawn `pi -p` only on demand            │
 └──────────────────────┬───────────────────────────────────┘
                        │ TCP 25565 (any host/port)

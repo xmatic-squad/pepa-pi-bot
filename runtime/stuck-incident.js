@@ -4,6 +4,13 @@
 // the reflex loop hasn't crashed, but a single reason code (e.g.
 // no_food_source, planner_empty) keeps coming back tick after tick.
 //
+// Before a proposal is filed, an optional critic pass (runtime/critic.js,
+// adapted from Voyager) gets one Pi roundtrip to judge whether the bot
+// actually failed. critic.success=true short-circuits the proposal (the
+// bot has already recovered between the detector tripping and now);
+// critic.success=false embeds the critique in the proposal body so the
+// downstream auto-patcher has a sharp spec instead of raw metrics.
+//
 // When the same reason persists past STUCK_THRESHOLD_MS we build a
 // proposal body summarising the situation, including:
 //   - the no-progress reason
@@ -112,52 +119,22 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 			).join("\n")
 			: "_(no scenario memory recorded yet)_";
 
-		const body = [
-			`# Stuck on \`${reason}\``,
-			"",
-			`The runtime has reported the same no-progress reason for >${Math.round(thresholdMs / 60000)} min without a productive action.`,
-			"",
-			"## Current state",
-			"",
-			"```json",
-			JSON.stringify(slim, null, 2),
-			"```",
-			"",
-			"## Last action result",
-			"",
-			lastResult
-				? `\`${lastResult.label}\` → ${lastResult.code ?? (lastResult.ok ? "ok" : "fail")}${lastResult.detail ? ` (${JSON.stringify(lastResult.detail).slice(0, 200)})` : ""}`
-				: "_(none recorded)_",
-			"",
-			"## Skill metrics so far (this process lifetime)",
-			"",
-			metricsLine,
-			"",
-			"## World journal (what we have discovered so far)",
-			"",
-			journalLine,
-			"",
-			"## Recent scenario memory (last attempts, what worked / failed in similar situations)",
-			"",
-			scenarioLines,
-			"",
-			"## Suggested fix",
-			"",
-			suggested
+		const body = renderActionTemplate({
+			title: `Stuck on \`${reason}\``,
+			lede: `The runtime has reported the same no-progress reason for >${Math.round(thresholdMs / 60000)} min without a productive action.`,
+			task: milestone?.title ?? "(no active milestone)",
+			suggestedSkill: suggested,
+			lastResult,
+			executionError: lastResult?.detail ?? null,
+			state: slim,
+			metrics: metricsLine,
+			journal: journalLine,
+			scenarioTail: scenarioLines,
+			editScope,
+			fixGuidance: suggested
 				? `Improve \`${suggested}\` so the bot can clear the \`${reason}\` blocker, OR teach a NEW skill that handles this kind of situation if no single edit fixes it. Touch only the listed files (the test files under runtime/**/*.test.js are auto-allowed). Use the scenario-memory entries above to avoid re-introducing patterns that already failed.`
 				: `The curriculum has no suggested skill for this state. Either teach the curriculum a new milestone OR add a recovery skill that turns this reason code into a productive action. The scenario memory above shows what's been tried.`,
-			"",
-			"## Edit scope (auto-patch must obey this)",
-			"",
-			editScope.map((p) => `- ${p}`).join("\n"),
-			"",
-			"## Forbidden",
-			"",
-			"- Don't touch `.env`, `state/`, `extensions/`, `tui/` unless the scope above includes them.",
-			"- Don't add new npm dependencies.",
-			"- Don't change git history (no `--amend`, no `git reset --hard`).",
-			"",
-		].join("\n");
+		});
 
 		return {
 			fire: true,
@@ -191,44 +168,20 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 			).join("\n")
 			: "_(no scenario memory)_";
 
-		const body = [
-			`# Wedged — escape-pit cannot extract the bot`,
-			"",
-			`The bot has produced ${WEDGED_FIRE_AT}+ "wedged-jump / escape-pit / blind" completions in a row.`,
-			"In-world it stands still; the existing escape primitives are not enough.",
-			"",
-			"## Current state",
-			"```json",
-			JSON.stringify(slim, null, 2),
-			"```",
-			"",
-			"## Last action result",
-			lastResult
-				? `\`${lastResult.label}\` → ${lastResult.code ?? (lastResult.ok ? "ok" : "fail")} ${lastResult.detail ? `(${JSON.stringify(lastResult.detail).slice(0, 200)})` : ""}`
-				: "_(none)_",
-			"",
-			"## Skill metrics",
-			metricsLine,
-			"",
-			"## World journal byKind",
-			journalLine,
-			"",
-			"## Recent scenario memory (last attempts)",
-			scenarioLines,
-			"",
-			"## Suggested fix",
-			"",
-			"Either improve `escapePit()` in `runtime/actions.js` (e.g. dig forward + down + side, not only up) OR add a NEW skill `recovery.tunnel-out` that breaks the bot out of a 1×1 hole by digging a 3-block tunnel in the most-free cardinal. Add tests under `runtime/skills/`.",
-			"",
-			"## Edit scope",
-			"- runtime/actions.js",
-			"- runtime/skills/",
-			"- runtime/reflex.js",
-			"",
-			"## Forbidden",
-			"- Don't touch `.env`, `state/`, `extensions/`, `tui/`, `package.json`.",
-			"- Don't add new npm dependencies.",
-		].join("\n");
+		const body = renderActionTemplate({
+			title: "Wedged — escape-pit cannot extract the bot",
+			lede: `The bot has produced ${WEDGED_FIRE_AT}+ "wedged-jump / escape-pit / blind" completions in a row. In-world it stands still; the existing escape primitives are not enough.`,
+			task: "free the bot from its current 1×1 wedge",
+			suggestedSkill: "recovery.tunnel-out",
+			lastResult,
+			executionError: lastResult?.detail ?? null,
+			state: slim,
+			metrics: metricsLine,
+			journal: journalLine,
+			scenarioTail: scenarioLines,
+			editScope: ["runtime/actions.js", "runtime/skills/", "runtime/reflex.js"],
+			fixGuidance: "Either improve `escapePit()` in `runtime/actions.js` (e.g. dig forward + down + side, not only up) OR add a NEW skill `recovery.tunnel-out` that breaks the bot out of a 1×1 hole by digging a 3-block tunnel in the most-free cardinal. Add tests under `runtime/skills/`.",
+		});
 
 		return {
 			fire: true,
@@ -241,3 +194,102 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 
 	return { check, checkWedged, noteResult, reset };
 }
+
+// Render a proposal body in the Voyager action_template.txt schema —
+// Task / Last action / Execution error / Current state / Metrics /
+// World journal / Scenario memory / Edit scope / Suggested fix /
+// Forbidden. The fixed section order trains Pi to scan a familiar
+// layout instead of re-parsing ad-hoc Markdown each time.
+export function renderActionTemplate({
+	title,
+	lede,
+	task,
+	suggestedSkill,
+	lastResult,
+	executionError,
+	state,
+	metrics,
+	journal,
+	scenarioTail,
+	editScope,
+	fixGuidance,
+}) {
+	const lastResultLine = lastResult
+		? `\`${lastResult.label}\` → ${lastResult.code ?? (lastResult.ok ? "ok" : "fail")}${lastResult.detail ? ` (${JSON.stringify(lastResult.detail).slice(0, 200)})` : ""}`
+		: "_(none recorded)_";
+	const errLine = executionError
+		? (typeof executionError === "string" ? executionError : JSON.stringify(executionError)).slice(0, 300)
+		: "_(none)_";
+	return [
+		`# ${title}`,
+		"",
+		lede,
+		"",
+		"## Task",
+		"",
+		`- **goal**: ${task}`,
+		`- **suggested skill**: ${suggestedSkill ? `\`${suggestedSkill}\`` : "_(none — propose one)_"}`,
+		"",
+		"## Last action result",
+		"",
+		lastResultLine,
+		"",
+		"## Execution error",
+		"",
+		errLine,
+		"",
+		"## Current state",
+		"",
+		"```json",
+		JSON.stringify(state, null, 2),
+		"```",
+		"",
+		"## Skill metrics (this process lifetime)",
+		"",
+		metrics,
+		"",
+		"## World journal (what we have discovered so far)",
+		"",
+		journal,
+		"",
+		"## Scenario memory (last attempts in similar situations)",
+		"",
+		scenarioTail,
+		"",
+		"## Suggested fix",
+		"",
+		fixGuidance,
+		"",
+		"## Edit scope (auto-patch must obey this)",
+		"",
+		(editScope || []).map((p) => `- ${p}`).join("\n"),
+		"",
+		"## Forbidden",
+		"",
+		"- Don't touch `.env`, `state/`, `extensions/`, `tui/` unless the scope above includes them.",
+		"- Don't add new npm dependencies.",
+		"- Don't change git history (no `--amend`, no `git reset --hard`).",
+		"",
+	].join("\n");
+}
+
+// Splice a Voyager-style critic block into a proposal body. Inserted just
+// before the "## Suggested fix" header so Pi sees the critic's surgical
+// hint before its own guidance.
+export function attachCritique(body, critique) {
+	if (!critique) return body;
+	const block = [
+		"## Critic (Pi pre-flight judgement)",
+		"",
+		`- **reasoning**: ${critique.reasoning || "(none)"}`,
+		`- **success-already**: ${critique.success}`,
+		`- **critique**: ${critique.critique || "(none)"}`,
+		critique.durationMs != null ? `- _critic took ${critique.durationMs}ms_` : null,
+		"",
+	].filter(Boolean).join("\n");
+	const marker = "## Suggested fix";
+	const idx = body.indexOf(marker);
+	if (idx < 0) return `${body}\n\n${block}`;
+	return `${body.slice(0, idx)}${block}\n${body.slice(idx)}`;
+}
+

@@ -10,6 +10,30 @@
 > reflex/action in `runtime/` over an extension in `extensions/` — the
 > hybrid runtime is where new work lands going forward.
 
+> **v0.1.0 — self-improvement loop hardened (2026-05-26).** New runtime
+> subsystems landed in the hybrid runtime and shape how new skills get
+> proposed and accepted:
+> - `runtime/critic.js` — Voyager-style pre-flight critic (Pi judges
+>   "did the bot really fail?" before a proposal is written;
+>   `success=true` short-circuits the proposal).
+> - `runtime/modes.js` — Mindcraft-style priority chain
+>   (`self_preservation > hunger > night_shelter`) that runs **before**
+>   the curriculum and can interrupt it.
+> - `runtime/skill-library.js` — top-k similar skills retrieved by word
+>   overlap and injected into `auto-patch.js` Pi prompt so new skills
+>   crib patterns from working ones.
+> - `runtime/perception.js` — numeric-id `findBlocks` wrapper. Don't write
+>   `bot.findBlock({matching: (b) => ...b.name...})` — under ViaBackwards
+>   `.name` is wrong inside the callback (see mineflayer #2347).
+> - `runtime/social/conversation.js` — file-JSONL multi-agent topics with
+>   IPC commands `cmd:conv-say|conv-recent|conv-list`.
+> - `scripts/lint-patch.js` — pre-flight gate that catches parse errors,
+>   missing named imports, and `runSkill("unknown.id")` before `npm test`.
+> - Proposals are rendered through `renderActionTemplate()` —
+>   Voyager `action_template.txt` schema (Task / Last result / Execution
+>   error / State / Metrics / Journal / Scenario memory / Critique / Fix
+>   / Edit scope / Forbidden). Stable layout = Pi scans faster.
+
 > **Product pivot (2026-05-25, Phase 0).** The bot is no longer a remote
 > control for operators or players. It is becoming a self-sufficient survival
 > resident of the configured Minecraft server. **Minecraft chat is

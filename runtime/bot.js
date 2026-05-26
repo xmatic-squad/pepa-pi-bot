@@ -46,7 +46,9 @@ import { runSkill } from "./skills/index.js";
 import { classifyIntent, INTENTS } from "./social/intent.js";
 import { generateReply } from "./social/reply.js";
 import { createChatMemory } from "./social/memory.js";
-import { createStuckIncidentDetector } from "./stuck-incident.js";
+import { openConversation, peekConversation, listConversations } from "./social/conversation.js";
+import { createStuckIncidentDetector, attachCritique } from "./stuck-incident.js";
+import { requestCritique } from "./critic.js";
 import { createSkillMetrics } from "./skill-metrics.js";
 import { createWorldJournal } from "./world-journal.js";
 import { createScenarioMemory, situationHash } from "./scenario-memory.js";
@@ -413,6 +415,37 @@ function maybeFileProposal(label) {
 	const { filename } = writeProposal({ kind: `repeated-fail-${label}`, summary, body });
 	warn("proposal", `filed ${filename}: ${summary}`);
 	appendDiary(`proposal filed: ${filename} (${summary})`);
+}
+
+// Async pre-flight critic — wrapper around writeProposal that asks Pi
+// "did the bot actually fail?" first. Runs detached so reflex keeps
+// ticking while critic burns 1–60s. If critic.success=true we drop the
+// proposal entirely; otherwise the critique is spliced into the body.
+async function filePostCritique(incident, channel) {
+	const critique = await requestCritique({
+		snapshot: lastSnapshot,
+		lastResult,
+		scenarioTail: scenarioMemory.recentTailFor({ n: 12 }),
+		milestone: lastSnapshot?.curriculum?.milestone?.title,
+		kind: incident.kind,
+	});
+	if (critique?.success) {
+		info(channel, `critic says already-recovered (${(critique.reasoning || "").slice(0, 100)}) — skipping proposal`);
+		return;
+	}
+	try {
+		const body = attachCritique(incident.body, critique);
+		const { filename } = writeProposal({
+			kind: incident.kind,
+			summary: incident.summary,
+			body,
+			editScope: incident.editScope,
+		});
+		warn(channel, `filed ${filename}: ${incident.summary}`);
+		appendDiary(`${channel}-proposal filed: ${filename} (${incident.summary})`);
+	} catch (e) {
+		warn(channel, `writeProposal failed: ${e.message}`);
+	}
 }
 
 // ---- chat (dialog-only via social/) ----------------------------------------
@@ -784,18 +817,7 @@ function tick() {
 			now,
 		});
 		if (stuck?.fire) {
-			try {
-				const { filename } = writeProposal({
-					kind: stuck.kind,
-					summary: stuck.summary,
-					body: stuck.body,
-					editScope: stuck.editScope,
-				});
-				warn("stuck", `filed ${filename}: ${stuck.summary}`);
-				appendDiary(`stuck-proposal filed: ${filename} (${stuck.summary})`);
-			} catch (e) {
-				warn("stuck", `writeProposal failed: ${e.message}`);
-			}
+			void filePostCritique(stuck, "stuck");
 		}
 
 		// Second fast-track trigger: explicit wedged loop (escape-pit ran N
@@ -810,18 +832,7 @@ function tick() {
 			now,
 		});
 		if (wedged?.fire) {
-			try {
-				const { filename } = writeProposal({
-					kind: wedged.kind,
-					summary: wedged.summary,
-					body: wedged.body,
-					editScope: wedged.editScope,
-				});
-				warn("wedged", `filed ${filename}: ${wedged.summary}`);
-				appendDiary(`wedged-proposal filed: ${filename}`);
-			} catch (e) {
-				warn("wedged", `writeProposal failed: ${e.message}`);
-			}
+			void filePostCritique(wedged, "wedged");
 		}
 
 		ipc?.broadcast(EVENT_TYPES.STATUS, lastSnapshot);
@@ -939,6 +950,32 @@ function handleCommand(msg, send) {
 				setTimeout(tryDispatch, 500);
 			};
 			tryDispatch();
+			break;
+		}
+		case COMMAND_TYPES.CONV_SAY: {
+			const { topic: topic_, text, intent, position } = msg.payload ?? {};
+			if (!topic_ || !text) { send(EVENT_TYPES.ERROR, { source: "conv", text: "topic and text required" }); return; }
+			try {
+				const h = openConversation(topic_, { speaker: cfg.username });
+				const turn = h.append({ text, intent, position: position ?? lastSnapshot?.position });
+				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "conv", text: `say to ${topic_}`, details: turn });
+			} catch (e) { send(EVENT_TYPES.ERROR, { source: "conv", text: e.message }); }
+			break;
+		}
+		case COMMAND_TYPES.CONV_RECENT: {
+			const { topic: topic_, n } = msg.payload ?? {};
+			if (!topic_) { send(EVENT_TYPES.ERROR, { source: "conv", text: "topic required" }); return; }
+			try {
+				const turns = peekConversation(topic_, n ?? 10);
+				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "conv", text: `recent ${topic_}`, details: { topic: topic_, turns } });
+			} catch (e) { send(EVENT_TYPES.ERROR, { source: "conv", text: e.message }); }
+			break;
+		}
+		case COMMAND_TYPES.CONV_LIST: {
+			try {
+				const topics = listConversations();
+				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "conv", text: "list", details: { topics } });
+			} catch (e) { send(EVENT_TYPES.ERROR, { source: "conv", text: e.message }); }
 			break;
 		}
 		default:

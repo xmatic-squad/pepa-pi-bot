@@ -28,6 +28,9 @@ export const COMMAND_TYPES = Object.freeze({
 	PROPOSAL_LATEST: "cmd:proposal-latest", // request latest pending proposal
 	PROPOSAL_APPROVE: "cmd:proposal-approve", // { filename } move to approved/
 	RUN_SKILL: "cmd:run-skill", // { skillId, args? } dispatch a skill once (operator ground-truth probes)
+	CONV_SAY: "cmd:conv-say", // { topic, text, intent?, position? } append turn to a multi-agent topic
+	CONV_RECENT: "cmd:conv-recent", // { topic, n? } read last n turns
+	CONV_LIST: "cmd:conv-list", // list active conversation topics
 });
 
 export function encodeFrame(obj) {
