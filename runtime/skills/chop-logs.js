@@ -28,7 +28,10 @@ function withTimeout(promise, ms, label) {
 export const skill = Object.freeze({
 	id: "gather.logs",
 	title: "Gather logs",
-	timeoutMs: 60_000,
+	// Must exceed chopNearestTree's own 60s collect timeout (plus the
+	// optional journal walk), otherwise runSkill times out first and retries
+	// gather.logs before the chop attempt can blacklist/recover.
+	timeoutMs: 90_000,
 	preconditions(ctx) {
 		if (!ctx?.bot) return { ok: false, code: "no_bot", detail: "bot missing" };
 		const known = logBlocks(ctx.bot);
@@ -88,11 +91,14 @@ export const skill = Object.freeze({
 		return result.ok && !!result.worldDelta?.logType;
 	},
 	recover(ctx, result) {
-		// Tell the caller: if there was no reachable log, switching to wander
-		// for ~60 s is the right next move — same heuristic the autonomous
-		// reflex already uses.
+		// Tell the caller: if there was no reachable log, or the attempted log
+		// took too long to path/dig, move away before retrying. This prevents
+		// repeated gather.logs timeouts in the same bad patch of terrain.
 		if (result.code === "no_target") {
-			return { hint: "wander", reason: "no log within 32 blocks" };
+			return { hint: "wander", reason: "no log within 64 blocks" };
+		}
+		if (result.code === "timeout") {
+			return { hint: "wander", reason: "log gather timed out" };
 		}
 		return null;
 	},
