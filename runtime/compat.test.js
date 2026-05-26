@@ -13,16 +13,20 @@ import { isManMadeBlockName, classifyArea, shouldAvoid } from "./claim-avoidance
 // We can't import owned-blocks.js until config-driven stateDir exists,
 // so it's tested via an isolated import in a temp dir below.
 
-test("movement profile descriptor: gather has canDig=true, canPlace=false", () => {
+// 2026-05-26: canDig is FALSE on every profile because bot.dig silently
+// fails on the live server (mineflayer #3888 / protocol 775). Once the
+// 1.21.4 pin restores real digging, gather/travel/flee profiles can flip
+// canDig back to true.
+test("movement profile descriptor: gather has canDig=false (silent-dig safeguard)", () => {
 	const d = describeProfile(PROFILES.GATHER);
-	assert.equal(d.canDig, true);
+	assert.equal(d.canDig, false);
 	assert.equal(d.canPlace, false);
 	assert.equal(d.allow1by1towers, false);
 });
 
-test("movement profile descriptor: flee allows higher drop, still canDig=true", () => {
+test("movement profile descriptor: flee allows higher drop, canDig=false", () => {
 	const d = describeProfile(PROFILES.FLEE);
-	assert.equal(d.canDig, true);
+	assert.equal(d.canDig, false);
 	assert.equal(d.maxDropDown, 8);
 });
 

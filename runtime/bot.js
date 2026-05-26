@@ -42,6 +42,7 @@ import { createNoProgressDetector } from "./no-progress.js";
 import { maybeStartViewer } from "./viewer.js";
 import { nextMilestone as nextCurriculumMilestone } from "./curriculum.js";
 import { listLocations } from "./locations.js";
+import { runSkill } from "./skills/index.js";
 import { classifyIntent, INTENTS } from "./social/intent.js";
 import { generateReply } from "./social/reply.js";
 import { createChatMemory } from "./social/memory.js";
@@ -801,6 +802,46 @@ function handleCommand(msg, send) {
 			} catch (e) {
 				send(EVENT_TYPES.ERROR, { source: "proposal", text: e.message });
 			}
+			break;
+		}
+		case COMMAND_TYPES.RUN_SKILL: {
+			const skillId = msg.payload?.skillId;
+			const args = msg.payload?.args ?? {};
+			if (!skillId) {
+				send(EVENT_TYPES.ERROR, { source: "run-skill", text: "missing skillId" });
+				return;
+			}
+			info("ipc", `run-skill: queued ${skillId} args=${JSON.stringify(args)} (will wait for current action)`);
+			// Pause the reflex loop while we wait so it doesn't immediately
+			// schedule another action and starve our request.
+			const wasPaused = reflexPaused;
+			reflexPaused = true;
+			const deadline = Date.now() + 120_000;
+			const tryDispatch = () => {
+				if (!reflexCtx.busy) {
+					info("ipc", `run-skill: dispatching ${skillId}`);
+					dispatchAction(() => runSkill(skillId, reflexCtx, args), `ipc:${skillId}`, {
+						onComplete: (res) => {
+							reflexPaused = wasPaused;
+							send(EVENT_TYPES.LOG, {
+								ts: new Date().toISOString(),
+								level: "info",
+								source: "run-skill",
+								text: `${skillId} → ${res.code ?? (res.ok ? "ok" : "fail")}`,
+								details: res,
+							});
+						},
+					});
+					return;
+				}
+				if (Date.now() > deadline) {
+					reflexPaused = wasPaused;
+					send(EVENT_TYPES.ERROR, { source: "run-skill", text: `still busy after 2 min with ${reflexCtx.currentActionLabel}` });
+					return;
+				}
+				setTimeout(tryDispatch, 500);
+			};
+			tryDispatch();
 			break;
 		}
 		default:

@@ -372,6 +372,11 @@ export async function chopNearestTree(bot) {
 	});
 	if (!log) return { ok: false, detail: `no reachable log within ${SEARCH_RADIUS} blocks` };
 
+	// 2026-05-26: ground-truth verification + lookAt+force. On
+	// play.xmatic.team (1.21 via ViaBackwards) bot.dig/collect can return
+	// success even when the block survives — the server silently drops our
+	// serverbound packet (project_mineflayer_via_protocol_pin). We refuse
+	// to call it ok unless the block is actually gone from the world.
 	ensureCollectBlock(bot);
 	setMovementsForGather(bot);
 	const axe = await equipBestAxe(bot);
@@ -379,14 +384,29 @@ export async function chopNearestTree(bot) {
 		"action",
 		`chop: ${log.name} at ${log.position.x},${log.position.y},${log.position.z} (tool=${axe ?? "fists"})`,
 	);
+	const targetPos = log.position.clone();
+	const key = `${targetPos.x},${targetPos.y},${targetPos.z}`;
 	try {
+		try {
+			await withTimeout(bot.lookAt(targetPos.offset(0.5, 0.5, 0.5), true), 2_000, "lookAt(log)");
+		} catch {}
 		await withTimeout(bot.collectBlock.collect(log), 60_000, "collectLog");
-		return { ok: true, detail: { logType: log.name, at: log.position } };
+		const after = bot.blockAt(targetPos);
+		if (after && LOG_NAMES.includes(after.name)) {
+			warn("action", `chop reported ok but log still at ${key} — silent dig failure`);
+			blacklist.set(key, Date.now() + BLACKLIST_TTL_MS);
+			return {
+				ok: false,
+				code: "silent_dig_failure",
+				detail: "block still exists after collect — server dropped dig packet?",
+				blacklisted: targetPos,
+			};
+		}
+		return { ok: true, detail: { logType: log.name, at: targetPos } };
 	} catch (e) {
 		warn("action", `chop failed: ${e.message}`);
-		const key = `${log.position.x},${log.position.y},${log.position.z}`;
 		blacklist.set(key, Date.now() + BLACKLIST_TTL_MS);
-		return { ok: false, detail: e.message, blacklisted: log.position };
+		return { ok: false, detail: e.message, blacklisted: targetPos };
 	}
 }
 

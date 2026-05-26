@@ -32,11 +32,15 @@ export const skill = Object.freeze({
 			};
 		}
 		const msg = String(res.detail ?? "");
-		const code = (msg.includes("no reachable log") || msg.includes("no log within"))
-			? "no_target"
-			: msg.includes("timed out")
-				? "timeout"
-				: "failed";
+		// res.code can come straight from actions.js (silent_dig_failure),
+		// otherwise we classify from the detail string.
+		const code = res.code
+			? res.code
+			: (msg.includes("no reachable log") || msg.includes("no log within"))
+				? "no_target"
+				: msg.includes("timed out")
+					? "timeout"
+					: "failed";
 		return { ok: false, code, detail: res.detail, worldDelta: null };
 	},
 	validate(ctx, result) {

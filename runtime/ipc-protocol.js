@@ -27,6 +27,7 @@ export const COMMAND_TYPES = Object.freeze({
 	SNAPSHOT: "cmd:snapshot", // request immediate STATUS event
 	PROPOSAL_LATEST: "cmd:proposal-latest", // request latest pending proposal
 	PROPOSAL_APPROVE: "cmd:proposal-approve", // { filename } move to approved/
+	RUN_SKILL: "cmd:run-skill", // { skillId, args? } dispatch a skill once (operator ground-truth probes)
 });
 
 export function encodeFrame(obj) {

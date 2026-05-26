@@ -109,13 +109,29 @@ export const skill = Object.freeze({
 		setMovementsForGather(bot);
 		const pickaxe = await equipBestPickaxe(bot);
 		info("action", `gather.stone: ${target.name} at ${target.position.x},${target.position.y},${target.position.z} (tool=${pickaxe ?? "fists"})`);
+		const targetPos = target.position.clone();
 		try {
+			try {
+				await withTimeout(bot.lookAt(targetPos.offset(0.5, 0.5, 0.5), true), 2_000, "lookAt(stone)");
+			} catch {}
 			await withTimeout(bot.collectBlock.collect(target), 60_000, "collectStone");
+			const after = bot.blockAt(targetPos);
+			if (after && STONE_NAMES.includes(after.name)) {
+				warn("action", `gather.stone reported ok but block still at ${targetPos.x},${targetPos.y},${targetPos.z} — silent dig failure`);
+				const key = `${targetPos.x},${targetPos.y},${targetPos.z}`;
+				blacklist.set(key, Date.now() + BLACKLIST_TTL_MS);
+				return {
+					ok: false,
+					code: "silent_dig_failure",
+					detail: "block still exists after collect — protocol/anti-cheat issue",
+					worldDelta: null,
+				};
+			}
 			return {
 				ok: true,
 				code: "done",
-				detail: { blockType: target.name, at: target.position },
-				worldDelta: { minedAt: target.position, blockType: target.name },
+				detail: { blockType: target.name, at: targetPos },
+				worldDelta: { minedAt: targetPos, blockType: target.name },
 			};
 		} catch (e) {
 			warn("action", `gather.stone failed: ${e.message}`);
