@@ -26,6 +26,7 @@ import { skill as chopLogs } from "./chop-logs.js";
 import { skill as eat } from "./eat.js";
 import { skill as wander } from "./wander.js";
 import { skill as gatherStone } from "./gather-stone.js";
+import { skill as chooseBase } from "./choose-base.js";
 import {
 	craftPlanksSkill,
 	craftSticksSkill,
@@ -55,6 +56,7 @@ register(chopLogs);
 register(eat);
 register(wander);
 register(gatherStone);
+register(chooseBase);
 register(craftPlanksSkill);
 register(craftSticksSkill);
 register(craftWoodenAxeSkill);

@@ -1,10 +1,20 @@
-// Reflex layer: priority-ordered list of pure-script behaviors. Each reflex
-// inspects the latest snapshot and either returns a no-op, dispatches an
-// async action via ctx.dispatch, or completes synchronously.
+// Reflex layer: priority-ordered behaviours that decide what the bot does
+// each tick. The LLM is NOT called here. If every reflex declines, the tick
+// yields and we try again next interval. The bot.js layer tracks consecutive
+// noops and escalates to Pi after a threshold (see ESCALATE_AFTER_NOOPS).
 //
-// LLM is NOT called here. If every reflex declines, the tick yields and we
-// try again next interval. The bot.js layer tracks consecutive noops and
-// escalates to Pi after a threshold (see ESCALATE_AFTER_NOOPS).
+// Chain (top to bottom — first to dispatch wins):
+//
+//   defend     event-driven, hostile in melee or low HP + close
+//   eat        event-driven, food bar low
+//   sleep      event-driven, night without hostile in reach
+//   curriculum the new scheduler — reads snapshot.curriculum and dispatches
+//              via runtime/skills/runSkill. Replaces the old ad-hoc
+//              tech-tree + autonomous chop/wander branches.
+//   idle       heartbeat logger
+//
+// Operator chat does NOT create tasks (Phase 0 pivot). TUI pause/stop is
+// the only local override.
 
 import { info, warn } from "./log.js";
 import {
@@ -12,16 +22,9 @@ import {
 	fleeFrom,
 	eatBestFood,
 	sleepInBed,
-	chopNearestTree,
 	wander,
-	craftPlanks,
-	craftSticks,
-	placeCraftingTable,
-	craftWoodenAxe,
-	craftWoodenPickaxe,
-	craftWoodenSword,
-	inv,
 } from "./actions.js";
+import { runSkill, getSkill } from "./skills/index.js";
 
 const REFLEX_LOG = "reflex";
 
@@ -32,10 +35,6 @@ const REFLEX_LOG = "reflex";
 // Reflexes must NEVER throw — they log and return noop on failure.
 
 // ---- defend ----------------------------------------------------------------
-//
-// Note: MC chat is dialog-only as of Phase 0 of the survival-bot PRD. There is
-// no operator-goal reflex anymore — operator/player chat cannot create a
-// movement/build/mining task. TUI is the only local control plane.
 
 function defendReflex(ctx) {
 	const s = ctx.snapshot;
@@ -132,131 +131,84 @@ function sleepReflex(ctx) {
 	return { action: "dispatched", kind: "sleep", label: "night" };
 }
 
-// ---- autonomous "live your best life" --------------------------------------
-
-// Triggered when no reactive reflex (operator/defend/eat/sleep) wants to act.
-// Picks ONE small proactive action and runs it. Cooldown so we don't fire on
-// every 3s tick — actions take 15-45s themselves and we want some breathing
-// room between them.
-const AUTONOMOUS_COOLDOWN_MS = 10_000;
-
-function autonomousReflex(ctx) {
-	const s = ctx.snapshot;
-	if (!s.connected) return { action: "noop" };
-
-	// Only suppress autonomous work at night when a hostile is in actual reach
-	// (within 16m). Distant mobs the perception layer happens to enumerate
-	// don't count — at this spawn there can be 80+ mobs visible but irrelevant
-	// to local action.
-	const nightClose = !s.isDay && s.closestHostile && s.closestHostile.distance <= 16;
-	if (nightClose) return { action: "noop" };
-
-	const since = Date.now() - (ctx.lastAutonomousAt ?? 0);
-	if (since < AUTONOMOUS_COOLDOWN_MS) return { action: "noop" };
-	ctx.lastAutonomousAt = Date.now();
-
-	// What to do: gather wood until we have a small stockpile, then wander a
-	// bit to find new chunks. If a recent chop attempt reported "no reachable
-	// log", switch to wander for the next 60s — chopping the same not-found
-	// position over and over is what the user observed live.
-	const inv = s.inventory ?? {};
-	const logCount = Object.entries(inv)
-		.filter(([name]) => name.endsWith("_log"))
-		.reduce((sum, [, n]) => sum + n, 0);
-
-	const noTreesRecently = ctx.noTreesUntil && Date.now() < ctx.noTreesUntil;
-	const wantChop = logCount < 16 && !noTreesRecently;
-	if (wantChop) {
-		ctx.dispatch(() => chopNearestTree(ctx.bot), "chop tree", {
-			onComplete: (res) => {
-				if (res.ok) {
-					info(REFLEX_LOG, `chopped ${res.detail?.logType ?? "log"}`);
-					ctx.noTreesUntil = 0; // success ⇒ trees exist around us
-				} else if (typeof res.detail === "string" && res.detail.includes("no reachable")) {
-					// No log within 32 blocks of the current position. Don't try
-					// again for 60s — wander first to find a new biome / chunk.
-					ctx.noTreesUntil = Date.now() + 60_000;
-				}
-			},
-		});
-		return { action: "dispatched", kind: "autonomous-chop", label: "chop tree" };
-	}
-	ctx.dispatch(() => wander(ctx.bot, 16), "wander", {});
-	return { action: "dispatched", kind: "autonomous-wander", label: "wander" };
-}
-
-// ---- tech-tree progression -------------------------------------------------
+// ---- curriculum ------------------------------------------------------------
 //
-// Scripted progression toward the long-term goal (small farm + village). Runs
-// between the autonomous wood-gathering reflex and idle. Order:
-//   1. have ≥4 logs but 0 planks  → craft planks
-//   2. have ≥2 planks but 0 sticks → craft sticks
-//   3. have planks+sticks but no axe → craft wooden_axe (places a table)
-//   4. have axe but no pickaxe → craft wooden_pickaxe
-//   5. have pickaxe but no sword → craft wooden_sword
-//   6. tools done — fall through to autonomous (chop more, then mine stone)
+// The new scheduler. Reads snapshot.curriculum (produced by runtime/
+// curriculum.js in bot.js's tick) and dispatches the suggested skill
+// via runSkill. Falls back to wander when:
+//   * no curriculum result (curriculum says "everything done — late game"),
+//   * suggested skill is unknown to the registry,
+//   * recent recover() hint asked us to wander (e.g. no_target from
+//     gather.logs / gather.stone — same heuristic the old autonomous
+//     reflex used).
 //
-// Each step is cheap and idempotent: if it can't act it returns noop.
+// Stone-tier locks: gather.stone needs a pickaxe; the skill's own
+// preconditions will reject otherwise. When that happens we record a
+// short backoff so we don't dispatch-and-fail every tick.
 
-const TECH_TREE_COOLDOWN_MS = 5_000;
+const CURRICULUM_COOLDOWN_MS = 4_000;
+const SKILL_BACKOFF_MS = 60_000;
 
-function techTreeReflex(ctx) {
+function curriculumReflex(ctx) {
 	const s = ctx.snapshot;
 	if (!s.connected) return { action: "noop" };
 	if (!ctx.bot) return { action: "noop" };
 
-	const since = Date.now() - (ctx.lastTechTreeAt ?? 0);
-	if (since < TECH_TREE_COOLDOWN_MS) return { action: "noop" };
+	const since = Date.now() - (ctx.lastCurriculumAt ?? 0);
+	if (since < CURRICULUM_COOLDOWN_MS) return { action: "noop" };
 
-	const logs = inv.getAnyLogCount(ctx.bot);
-	const planks = inv.getAnyPlanksCount(ctx.bot);
-	const sticks = inv.getItemCount(ctx.bot, "stick");
-	const hasAxe = ["wooden_axe", "stone_axe", "iron_axe", "diamond_axe", "netherite_axe"].some(
-		(n) => inv.getItemCount(ctx.bot, n) > 0,
-	);
-	const hasPickaxe = [
-		"wooden_pickaxe",
-		"stone_pickaxe",
-		"iron_pickaxe",
-		"diamond_pickaxe",
-		"netherite_pickaxe",
-	].some((n) => inv.getItemCount(ctx.bot, n) > 0);
-	const hasSword = ["wooden_sword", "stone_sword", "iron_sword", "diamond_sword", "netherite_sword"].some(
-		(n) => inv.getItemCount(ctx.bot, n) > 0,
-	);
+	const plan = s.curriculum?.plan;
+	const wanderHintUntil = ctx.skillBackoff?.["__wander_hint__"] ?? 0;
+	const wantWander = wanderHintUntil && Date.now() < wanderHintUntil;
 
-	// Step 1: planks
-	if (logs >= 1 && planks < 4) {
-		ctx.lastTechTreeAt = Date.now();
-		ctx.dispatch(() => craftPlanks(ctx.bot, 4), "craft planks");
-		return { action: "dispatched", kind: "tech-planks", label: `planks (have ${planks}/4)` };
-	}
-	// Step 2: sticks
-	if (planks >= 2 && sticks < 4) {
-		ctx.lastTechTreeAt = Date.now();
-		ctx.dispatch(() => craftSticks(ctx.bot, 4), "craft sticks");
-		return { action: "dispatched", kind: "tech-sticks", label: `sticks (have ${sticks}/4)` };
-	}
-	// Step 3: axe
-	if (planks >= 3 && sticks >= 2 && !hasAxe) {
-		ctx.lastTechTreeAt = Date.now();
-		ctx.dispatch(() => craftWoodenAxe(ctx.bot), "craft wooden_axe");
-		return { action: "dispatched", kind: "tech-axe", label: "wooden_axe" };
-	}
-	// Step 4: pickaxe
-	if (planks >= 3 && sticks >= 2 && hasAxe && !hasPickaxe) {
-		ctx.lastTechTreeAt = Date.now();
-		ctx.dispatch(() => craftWoodenPickaxe(ctx.bot), "craft wooden_pickaxe");
-		return { action: "dispatched", kind: "tech-pickaxe", label: "wooden_pickaxe" };
-	}
-	// Step 5: sword
-	if (planks >= 2 && sticks >= 1 && hasAxe && hasPickaxe && !hasSword) {
-		ctx.lastTechTreeAt = Date.now();
-		ctx.dispatch(() => craftWoodenSword(ctx.bot), "craft wooden_sword");
-		return { action: "dispatched", kind: "tech-sword", label: "wooden_sword" };
+	// No skill plan from curriculum OR a recent skill asked us to wander —
+	// dispatch a wander fallback so we keep moving.
+	if (!plan?.skillId || wantWander) {
+		ctx.lastCurriculumAt = Date.now();
+		ctx.dispatch(() => wander(ctx.bot, 16), "wander", {});
+		return { action: "dispatched", kind: "curriculum-wander", label: "wander" };
 	}
 
-	return { action: "noop" };
+	const skillId = plan.skillId;
+	const skill = getSkill(skillId);
+	if (!skill) {
+		// Curriculum suggested a skill that isn't registered yet — fall back
+		// to wander rather than spinning. This is the right behaviour for
+		// future milestones we haven't wired (e.g. shelter blueprints).
+		ctx.lastCurriculumAt = Date.now();
+		ctx.dispatch(() => wander(ctx.bot, 16), "wander", {});
+		return { action: "dispatched", kind: "curriculum-wander", label: `wander (no skill ${skillId})` };
+	}
+
+	// Per-skill backoff: if this exact skill failed with a non-recoverable
+	// reason recently (missing_tool, missing_material, no_target) we give it
+	// breathing room rather than retrying every cooldown.
+	const backoffUntil = ctx.skillBackoff?.[skillId] ?? 0;
+	if (Date.now() < backoffUntil) return { action: "noop" };
+
+	ctx.lastCurriculumAt = Date.now();
+	ctx.dispatch(() => runSkill(skillId, ctx), skillId, {
+		onComplete: (res) => {
+			ctx.skillBackoff = ctx.skillBackoff ?? {};
+			if (res?.recovery?.hint === "wander") {
+				// Same fix the old autonomous reflex applied for "no reachable
+				// log" — switch to exploration for a minute.
+				ctx.skillBackoff["__wander_hint__"] = Date.now() + SKILL_BACKOFF_MS;
+			}
+			if (!res?.ok) {
+				// missing_tool / missing_material / no_target shouldn't be
+				// retried on the very next tick. Hold for SKILL_BACKOFF_MS.
+				const cooldownCodes = new Set(["missing_tool", "missing_material", "no_target", "no_food_source", "unsupported_version"]);
+				if (cooldownCodes.has(res?.code)) {
+					ctx.skillBackoff[skillId] = Date.now() + SKILL_BACKOFF_MS;
+				}
+			} else {
+				// Success clears the wander hint immediately.
+				ctx.skillBackoff["__wander_hint__"] = 0;
+			}
+		},
+	});
+	return { action: "dispatched", kind: "curriculum-skill", label: skillId };
 }
 
 // ---- idle ------------------------------------------------------------------
@@ -277,8 +229,7 @@ const REFLEXES = [
 	{ name: "defend", fn: defendReflex },
 	{ name: "eat", fn: eatReflex },
 	{ name: "sleep", fn: sleepReflex },
-	{ name: "tech-tree", fn: techTreeReflex },
-	{ name: "autonomous", fn: autonomousReflex },
+	{ name: "curriculum", fn: curriculumReflex },
 	{ name: "idle", fn: idleReflex },
 ];
 
@@ -301,3 +252,6 @@ export function runTick(ctx) {
 	}
 	return null;
 }
+
+// Exposed for tests.
+export const _internal = { curriculumReflex, defendReflex, eatReflex, sleepReflex };

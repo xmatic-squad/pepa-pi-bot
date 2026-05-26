@@ -246,6 +246,56 @@ in-process. The package is **not** a default dep — install it explicitly
 (`npm i prismarine-viewer`) before enabling. If missing, the runtime
 logs a warning and continues.
 
+### Scheduler driven by the curriculum (2026-05-26)
+
+The reflex chain is now: `defend → eat → sleep → curriculum → idle`.
+
+`curriculumReflex` reads `snapshot.curriculum.plan.skillId` (populated
+by `runtime/curriculum.js` each tick) and dispatches it via
+`runSkill(skillId, ctx)`. Recovery hints flow back through
+`ctx.skillBackoff`:
+
+- If the skill's `recover()` returns `{ hint: "wander" }` (e.g.
+  `gather.logs` returns `code: "no_target"` because there's no tree
+  within 32m), the curriculum reflex swaps to `wander` for ~60 s.
+- If the result code is `missing_tool` / `missing_material` /
+  `no_target` / `no_food_source` / `unsupported_version`, that
+  specific skill backs off for 60 s instead of retrying every tick.
+- Unknown `skillId` (curriculum suggested something that isn't
+  registered yet) falls through to `wander` — useful while we wire
+  future skills like `village.build-shelter`.
+
+The old `techTreeReflex` and `autonomousReflex` were removed — the
+curriculum + craft skills cover their territory, and unit tests in
+`runtime/reflex.test.js` exercise the new dispatch paths.
+
+### Chat banter escalation to Pi (2026-05-26)
+
+When `social/intent.js` classifies an inbound line as
+`ADDRESSED_BANTER` and templates can't answer, `bot.js` spawns a
+one-shot `askPi` with the bot's runtime state + the last 5 lines from
+that speaker (redacted via `chatMemory`). The reply is capped at 200
+chars and sent as a single chat line.
+
+Hard rate limit so banter can't drain the LLM budget:
+**6 calls per hour, minimum 90 s between calls.** Suppressed escalations log
+once and silently drop.
+
+### Base-site scoring + locations (2026-05-26)
+
+- **`runtime/locations.js`** — atomic JSON store at
+  `state/<host>/locations.json`. `setLocation(name, {x,y,z,…})`,
+  `getLocation(name)`, `nearestLocation({x,z})`.
+- **`runtime/base-site.js`** — `scoreCurrentPosition(bot)` returns
+  `{score, reasons, position}` based on wood/stone/water proximity,
+  surface flatness, distance to other players and absence of foreign
+  builds (man-made blocks not in the owned-blocks ledger).
+- **`runtime/skills/choose-base.js`** — `village.choose-base` scores
+  the current spot; if `score ≥ 8` it writes `locations.base`,
+  otherwise emits `code: "too_weak"` with a `wander` recover hint.
+- The curriculum has a new final milestone `village.base-site` that
+  fires `village.choose-base` until a base is established.
+
 ### Compatibility hardening (Phase 7)
 
 Several modules now guard against the live regressions PRD §7 Phase 7

@@ -122,7 +122,10 @@ test("all done → null", () => {
 		stone_axe: 1, stone_pickaxe: 1, stone_sword: 1, furnace: 1,
 		bread: 4, chest: 1, torch: 8,
 	};
-	assert.equal(nextMilestone(snap(inv, { food: 20 })), null);
+	assert.equal(
+		nextMilestone(snap(inv, { food: 20, locations: { base: { x: 0, y: 64, z: 0 } } })),
+		null,
+	);
 });
 
 test("isInventoryFull threshold = 32 distinct stacks", () => {
@@ -146,7 +149,7 @@ test("inventoryFull flag is returned alongside milestone, not as override", () =
 test("listMilestones exposes ordered ids for diary/TUI", () => {
 	const ms = listMilestones();
 	assert.equal(ms[0].id, "wood.16");
-	assert.equal(ms[ms.length - 1].id, "shelter.torch");
+	assert.equal(ms[ms.length - 1].id, "village.base-site");
 	for (const m of ms) {
 		assert.equal(typeof m.id, "string");
 		assert.equal(typeof m.title, "string");
