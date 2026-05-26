@@ -46,6 +46,8 @@ import { runSkill } from "./skills/index.js";
 import { classifyIntent, INTENTS } from "./social/intent.js";
 import { generateReply } from "./social/reply.js";
 import { createChatMemory } from "./social/memory.js";
+import { appendChat as appendChatHistory } from "./social/chat-history.js";
+import { piReply } from "./social/reply-pi.js";
 import { openConversation, peekConversation, listConversations } from "./social/conversation.js";
 import { takeScreenshot } from "./viewer.js";
 import { createStuckIncidentDetector, attachCritique } from "./stuck-incident.js";
@@ -545,8 +547,10 @@ function handleChat(username, text) {
 	if (!bot) return;
 	const trimmed = String(text ?? "").trim();
 	if (!trimmed) return;
+	if (username === bot.username) return; // never reply to ourselves
 
 	chatMemory.append(username, trimmed);
+	try { appendChatHistory({ player: username, dir: "in", text: trimmed, snapshot: lastSnapshot }); } catch {}
 
 	const intent = classifyIntent({ text: trimmed, botName: bot.username });
 
@@ -583,24 +587,35 @@ function handleChat(username, text) {
 		return;
 	}
 
-	// Greetings / status / addressed banter → templated reply, rate-limited.
+	// Greetings / status / addressed banter → Pi reply with persona +
+	// per-player history. The old template path stays as a fast
+	// fallback when Pi is unavailable or times out.
 	const since = Date.now() - lastChatReplyAt;
 	if (since < CHAT_REPLY_COOLDOWN_MS) return;
 	const diaryTail = (() => {
 		try { return readDiaryTail(1); } catch { return null; }
 	})();
-	const result = generateReply({ intent, speaker: username, snapshot: lastSnapshot, diaryTail });
-	if (result?.send) {
-		lastChatReplyAt = Date.now();
-		botChat(result.send);
-		return;
-	}
-	if (result?.escalate) {
-		// Templates didn't fit AND the bot was addressed → ask Pi for a
-		// one-liner. Hard rate-limited so addressed-banter lines can't
-		// drain the LLM budget.
-		escalateChatToPi({ speaker: username, text: trimmed, intent });
-	}
+
+	(async () => {
+		try {
+			const pi = await piReply({ player: username, text: trimmed, snapshot: lastSnapshot, diaryTail });
+			if (pi) {
+				lastChatReplyAt = Date.now();
+				botChat(pi);
+				try { appendChatHistory({ player: username, dir: "out", text: pi, snapshot: lastSnapshot }); } catch {}
+				return;
+			}
+		} catch (e) {
+			warn("chat", `piReply threw: ${e.message}`);
+		}
+		// Fallback: templated reply so the bot still says something.
+		const result = generateReply({ intent, speaker: username, snapshot: lastSnapshot, diaryTail });
+		if (result?.send) {
+			lastChatReplyAt = Date.now();
+			botChat(result.send);
+			try { appendChatHistory({ player: username, dir: "out", text: result.send, snapshot: lastSnapshot }); } catch {}
+		}
+	})();
 }
 
 // ---- connect ---------------------------------------------------------------
