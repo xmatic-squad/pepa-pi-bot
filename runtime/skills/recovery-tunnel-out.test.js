@@ -84,6 +84,9 @@ test("tunnel-out does not count jumping in place as escape", async () => {
 	blocks["-1,64,0"] = "oak_planks";
 
 	const bot = makeBot(blocks);
+	bot.dig = async (block) => {
+		blocks[`${block.position.x},${block.position.y},${block.position.z}`] = "air";
+	};
 	bot.setControlState = (control, on) => {
 		if (control === "jump" && on) {
 			bot.entity.position = makePos(bot.entity.position.x, bot.entity.position.y + 1, bot.entity.position.z);
