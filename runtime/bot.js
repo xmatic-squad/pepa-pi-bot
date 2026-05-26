@@ -645,6 +645,7 @@ function connect() {
 		try {
 			pathWatchdog?.stop();
 			pathWatchdog = createPathfinderWatchdog(bot);
+			info("pathfinder", "stuck-replan watchdog armed");
 		} catch (e) { warn("pathfinder", `watchdog start failed: ${e?.message ?? e}`); }
 	});
 
