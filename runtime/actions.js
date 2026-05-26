@@ -525,12 +525,12 @@ async function escapePit(bot, maxSteps = 3) {
 	}
 
 	// Let jump physics settle before deciding whether escape-pit worked.
-	// A mid-jump Y delta is not freedom; require horizontal movement or a
-	// sustained one-block climb before reporting success.
+	// Vertical-only motion is not freedom from a wedged shaft; require real
+	// horizontal movement, otherwise fall through to the tunnel-out skill.
 	await new Promise((r) => setTimeout(r, 500));
 	const moved = horizontalDistance(before, bot.entity.position);
 	const climbed = verticalGain(before, bot.entity.position);
-	if (moved >= 0.75 || climbed >= 0.9) {
+	if (moved >= 0.75) {
 		return { ok: true, code: "done", detail: { mode: "escape-pit-up", moved, climbed } };
 	}
 	info("action", `escape-pit moved only ${moved.toFixed(2)} horizontally (dy=${climbed.toFixed(2)}) → tunnel-out`);
