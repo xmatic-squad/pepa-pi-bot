@@ -37,6 +37,11 @@ let consecutiveWanderHints = 0;
 
 const REFLEX_LOG = "reflex";
 
+const DEFEND_ATTACK_MAX_SWINGS = 5;
+const DEFEND_ATTACK_SETTLE_MS = 650;
+const DEFEND_CLEAR_RADIUS = 4.5;
+const DEFEND_STUCK_WINDOW_MS = 20_000;
+
 // A reflex returns one of:
 //   { action: "noop" }                       — nothing to do
 //   { action: "dispatched", kind, label }    — dispatched an async action
@@ -45,50 +50,155 @@ const REFLEX_LOG = "reflex";
 
 // ---- defend ----------------------------------------------------------------
 
+function delay(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function nearestHostileDistance(bot, hostileName) {
+	const here = bot?.entity?.position;
+	if (!here) return null;
+	let nearest = null;
+	for (const e of Object.values(bot.entities ?? {})) {
+		if (!e?.position) continue;
+		if (hostileName && e.name !== hostileName) continue;
+		let dist;
+		try {
+			dist = e.position.distanceTo(here);
+		} catch {
+			continue;
+		}
+		if (!Number.isFinite(dist)) continue;
+		if (nearest === null || dist < nearest) nearest = dist;
+	}
+	return nearest;
+}
+
+function distanceDetail(dist) {
+	return Number.isFinite(dist) ? Number(dist.toFixed(1)) : dist;
+}
+
+async function attackNearestUntilClear(bot, hostileName, opts = {}) {
+	if (!bot?.entity?.position) return { ok: false, code: "no_bot", detail: "bot missing position" };
+	const maxSwings = Math.max(1, opts.maxSwings ?? DEFEND_ATTACK_MAX_SWINGS);
+	const settleMs = Math.max(0, opts.settleMs ?? DEFEND_ATTACK_SETTLE_MS);
+	let lastDetail = null;
+
+	for (let swings = 0; swings < maxSwings; swings++) {
+		const before = nearestHostileDistance(bot, hostileName);
+		if (before === null || before > DEFEND_CLEAR_RADIUS) {
+			return { ok: true, code: "done", detail: { target: hostileName, cleared: true, swings } };
+		}
+
+		const res = await attackNearest(bot, hostileName);
+		lastDetail = res?.detail ?? null;
+		if (!res?.ok) {
+			return {
+				ok: false,
+				code: res?.code ?? "no_target",
+				detail: res?.detail ?? "no target in reach",
+			};
+		}
+		if (settleMs > 0) await delay(settleMs);
+	}
+
+	const after = nearestHostileDistance(bot, hostileName);
+	if (after === null || after > DEFEND_CLEAR_RADIUS) {
+		return { ok: true, code: "done", detail: { target: hostileName, cleared: true, swings: maxSwings } };
+	}
+	return {
+		ok: false,
+		code: "hostile_still_near",
+		detail: {
+			target: hostileName,
+			distance: distanceDetail(after),
+			swings: maxSwings,
+			last: lastDetail,
+		},
+	};
+}
+
+function rememberDefendAttack(ctx, hostileName, res) {
+	if (res?.ok) {
+		if (ctx.defendAttackStuck?.name === hostileName) ctx.defendAttackStuck = null;
+		return;
+	}
+	if (res?.code !== "hostile_still_near") return;
+	const prev = ctx.defendAttackStuck;
+	const now = Date.now();
+	const count = prev?.name === hostileName && now - prev.ts < DEFEND_STUCK_WINDOW_MS
+		? prev.count + 1
+		: 1;
+	ctx.defendAttackStuck = { name: hostileName, count, ts: now };
+}
+
+function shouldRetreatFromStuckAttack(ctx, hostileName) {
+	const stuck = ctx.defendAttackStuck;
+	if (!stuck || stuck.name !== hostileName) return false;
+	return stuck.count >= 1 && Date.now() - stuck.ts < DEFEND_STUCK_WINDOW_MS;
+}
+
+function matchingHostileEntity(ctx, hostileName, dist) {
+	return Object.values(ctx.bot?.entities ?? {}).find(
+		(e) =>
+			e.name === hostileName &&
+			e.position &&
+			Math.abs(e.position.distanceTo(ctx.bot.entity.position) - dist) < 1.5,
+	);
+}
+
+function dispatchDefendFlee(ctx, hostile, dist, opts = {}) {
+	const lastFlee = ctx.lastFleeAttempt;
+	if (!opts.ignoreCooldown && lastFlee && lastFlee.name === hostile.name && Date.now() - lastFlee.ts < 60_000) {
+		return { action: "noop" };
+	}
+	ctx.lastFleeAttempt = { name: hostile.name, ts: Date.now() };
+
+	const fromEntity = matchingHostileEntity(ctx, hostile.name, dist);
+	ctx.dispatch(
+		() => fleeFrom(ctx.bot, fromEntity, 16),
+		`flee from ${hostile.name}`,
+	);
+	return { action: "dispatched", kind: "defend-flee", label: hostile.name };
+}
+
 function defendReflex(ctx) {
 	const s = ctx.snapshot;
 	if (!s.connected) return { action: "noop" };
 	if (!s.closestHostile) return { action: "noop" };
 
-	const dist = s.closestHostile.distance;
+	const hostile = s.closestHostile;
+	const dist = hostile.distance;
 	const lowHp = (s.health ?? 20) <= 8;
 
 	// Three regimes — tightened to avoid the "82 distant hostiles → constant
 	// flee" pathology observed at this spawn:
-	//   - within 4m: melee attack
+	//   - within 4m: verified melee attack (do not report success while the
+	//     hostile is still standing in reach)
 	//   - within 8m (and visibly hostile to us): flee
 	//   - low-HP fallback: flee anything within 12m
 	// Anything beyond 8m with full HP is ignored regardless of how many
 	// hostiles the perceive snapshot enumerates.
 	if (dist <= 4) {
+		if (shouldRetreatFromStuckAttack(ctx, hostile.name)) {
+			ctx.defendAttackStuck = null;
+			return dispatchDefendFlee(ctx, hostile, dist, { ignoreCooldown: true });
+		}
 		ctx.dispatch(
-			() => attackNearest(ctx.bot, s.closestHostile.name),
-			`attack ${s.closestHostile.name}`,
+			() => attackNearestUntilClear(ctx.bot, hostile.name, {
+				maxSwings: ctx.defendAttackMaxSwings,
+				settleMs: ctx.defendAttackSettleMs,
+			}),
+			`attack ${hostile.name}`,
+			{ onComplete: (res) => rememberDefendAttack(ctx, hostile.name, res) },
 		);
-		return { action: "dispatched", kind: "defend-attack", label: s.closestHostile.name };
+		return { action: "dispatched", kind: "defend-attack", label: hostile.name };
 	}
 	const shouldFlee = (dist <= 8) || (lowHp && dist <= 12);
 	if (!shouldFlee) return { action: "noop" };
 
 	// Cooldown — if we just fled from this same mob type and it didn't work
 	// (timed out), don't immediately re-fire. Let other reflexes run.
-	const lastFlee = ctx.lastFleeAttempt;
-	if (lastFlee && lastFlee.name === s.closestHostile.name && Date.now() - lastFlee.ts < 60_000) {
-		return { action: "noop" };
-	}
-	ctx.lastFleeAttempt = { name: s.closestHostile.name, ts: Date.now() };
-
-	const fromEntity = Object.values(ctx.bot.entities).find(
-		(e) =>
-			e.name === s.closestHostile.name &&
-			e.position &&
-			Math.abs(e.position.distanceTo(ctx.bot.entity.position) - dist) < 1.5,
-	);
-	ctx.dispatch(
-		() => fleeFrom(ctx.bot, fromEntity, 16),
-		`flee from ${s.closestHostile.name}`,
-	);
-	return { action: "dispatched", kind: "defend-flee", label: s.closestHostile.name };
+	return dispatchDefendFlee(ctx, hostile, dist);
 }
 
 // ---- eat -------------------------------------------------------------------

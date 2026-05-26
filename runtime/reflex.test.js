@@ -7,6 +7,36 @@ import assert from "node:assert/strict";
 
 import { runTick } from "./reflex.js";
 
+function vec(x, y, z) {
+	return {
+		x,
+		y,
+		z,
+		distanceTo(other) {
+			return Math.hypot(this.x - other.x, this.y - other.y, this.z - other.z);
+		},
+		offset(dx, dy, dz) {
+			return vec(this.x + dx, this.y + dy, this.z + dz);
+		},
+	};
+}
+
+function makeCombatBot({ removeOnAttack = false } = {}) {
+	return {
+		attacks: 0,
+		entity: { position: vec(0, 64, 0) },
+		entities: {
+			zombie1: { name: "zombie", height: 1.8, position: vec(3, 64, 0) },
+		},
+		inventory: { items: () => [] },
+		lookAt: async () => {},
+		attack() {
+			this.attacks++;
+			if (removeOnAttack) delete this.entities.zombie1;
+		},
+	};
+}
+
 function makeCtx({
 	snapshot,
 	busy = false,
@@ -27,7 +57,7 @@ function makeCtx({
 		lastCurriculumAt,
 		skillBackoff,
 		dispatch(fn, label, opts = {}) {
-			dispatches.push({ label, opts });
+			dispatches.push({ fn, label, opts });
 		},
 	};
 	return { ctx, dispatches };
@@ -64,6 +94,49 @@ test("defend wins over curriculum when hostile in melee", () => {
 	const out = runTick(ctx);
 	assert.equal(out.reflex, "defend");
 	assert.match(dispatches[0].label, /attack zombie/);
+});
+
+test("defend attack does not report success while hostile remains nearby", async () => {
+	const bot = makeCombatBot();
+	const { ctx, dispatches } = makeCtx({
+		bot,
+		snapshot: {
+			connected: true,
+			health: 20,
+			closestHostile: { name: "zombie", distance: 3 },
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+	ctx.defendAttackMaxSwings = 2;
+	ctx.defendAttackSettleMs = 0;
+
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "defend");
+	const res = await dispatches[0].fn();
+	assert.equal(res.ok, false);
+	assert.equal(res.code, "hostile_still_near");
+	assert.equal(bot.attacks, 2);
+});
+
+test("defend flees after a verified attack leaves hostile in reach", () => {
+	const bot = makeCombatBot();
+	const { ctx, dispatches } = makeCtx({
+		bot,
+		snapshot: {
+			connected: true,
+			health: 20,
+			closestHostile: { name: "zombie", distance: 3 },
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+	const first = runTick(ctx);
+	assert.equal(first.reflex, "defend");
+	dispatches[0].opts.onComplete({ ok: false, code: "hostile_still_near" });
+
+	const second = runTick(ctx);
+	assert.equal(second.reflex, "defend");
+	assert.equal(second.kind, "defend-flee");
+	assert.equal(dispatches[1].label, "flee from zombie");
 });
 
 test("eat wins over curriculum when food low and bot has food in inventory", () => {
