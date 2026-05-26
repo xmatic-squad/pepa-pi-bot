@@ -59,6 +59,14 @@ function ensureCollectBlock(bot) {
 	collectBlockLoaded.add(bot);
 }
 
+function forceStopCollectBlock(bot) {
+	// collectBlock.collect() is not abortable by Promise.race. If its own
+	// cancelTask also stalls, leave the plugin empty so the next gather does
+	// not spend another 60s trying to cancel the previous target queue.
+	try { bot.collectBlock?.targets?.clear?.(); } catch {}
+	try { bot.pathfinder?.stop?.(); } catch {}
+}
+
 // Each action that uses pathfinder should set its own Movements profile
 // before calling goto — otherwise it inherits whatever the previous caller
 // left set, which has caused live regressions (e.g. flee setting canDig=false,
@@ -409,17 +417,19 @@ export async function chopNearestTree(bot) {
 		}
 		return { ok: true, detail: { logType: log.name, at: targetPos } };
 	} catch (e) {
-		warn("action", `chop failed: ${e.message}`);
+		const msg = e?.message ?? String(e);
+		warn("action", `chop failed: ${msg}`);
 		// Promise.race timeouts do not cancel mineflayer-collectblock; an old
 		// collect task can keep owning pathfinder and make every retry time out.
 		try {
 			await withTimeout(bot.collectBlock?.cancelTask?.() ?? Promise.resolve(), 2_000, "cancelCollectLog");
 		} catch (cancelErr) {
 			warn("action", `chop cancel failed: ${cancelErr.message}`);
-			try { bot.pathfinder?.stop?.(); } catch {}
+		} finally {
+			forceStopCollectBlock(bot);
 		}
 		blacklist.set(key, Date.now() + BLACKLIST_TTL_MS);
-		return { ok: false, detail: e.message, blacklisted: targetPos };
+		return { ok: false, code: msg.includes("timed out") ? "timeout" : "failed", detail: msg, blacklisted: targetPos };
 	}
 }
 
