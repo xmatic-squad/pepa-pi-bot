@@ -24,9 +24,40 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 	let firstSeenAt = 0;
 	let lastFiredAt = 0;
 
+	// Additional trigger path: when the bot has produced N "non-productive
+	// completions" in a row (same skill returning mode:escape-pit /
+	// wedged-jump / blind walk, no inventory or position change), fire a
+	// stuck incident immediately — these are exactly the cases where Pi
+	// should write a NEW skill, not patch an existing one.
+	let consecutiveWedged = 0;
+	const WEDGED_FIRE_AT = 3;
+	let lastWedgedFireAt = 0;
+	const WEDGED_COOLDOWN_MS = 10 * 60_000;
+
 	function reset() {
 		currentReason = null;
 		firstSeenAt = 0;
+	}
+
+	// Caller pings this every time an action completes; we look at the
+	// mode/detail to decide if it counts as "wedged" (bot didn't really
+	// accomplish anything in-world).
+	function noteResult(res) {
+		const mode = res?.detail?.mode ?? res?.worldDelta?.mode;
+		const isWedgedShape = mode === "escape-pit" || mode === "wedged-jump" || mode === "blind" || mode === "wedged-jump";
+		if (isWedgedShape && res?.ok) {
+			consecutiveWedged++;
+		} else if (res?.ok) {
+			consecutiveWedged = 0;
+		}
+	}
+
+	function wedgedShouldFire(now = Date.now()) {
+		if (consecutiveWedged < WEDGED_FIRE_AT) return false;
+		if (now - lastWedgedFireAt < WEDGED_COOLDOWN_MS) return false;
+		lastWedgedFireAt = now;
+		consecutiveWedged = 0;
+		return true;
 	}
 
 	// Returns { fire: true, body, kind, editScope } when an incident should
@@ -137,5 +168,76 @@ export function createStuckIncidentDetector({ thresholdMs = STUCK_THRESHOLD_MS, 
 		};
 	}
 
-	return { check, reset };
+	function checkWedged({ snapshot, lastResult, metrics, journalSummary, scenarioTail, now = Date.now() }) {
+		if (!wedgedShouldFire(now)) return null;
+		const slim = {
+			runtimeState: snapshot?.runtimeState,
+			noProgressReason: snapshot?.noProgressReason,
+			position: snapshot?.position,
+			health: snapshot?.health,
+			food: snapshot?.food,
+			isDay: snapshot?.isDay,
+			inventoryCounts: Object.keys(snapshot?.inventory ?? {}).length,
+		};
+		const metricsLine = metrics && Object.keys(metrics).length
+			? Object.entries(metrics).map(([id, m]) => `${id}: ok=${m.ok} fail=${m.fail}`).join(", ")
+			: "(none)";
+		const journalLine = journalSummary
+			? `byKind=${JSON.stringify(journalSummary.byKind ?? {})} buckets=${journalSummary.totalBuckets ?? 0}`
+			: "(none)";
+		const scenarioLines = Array.isArray(scenarioTail) && scenarioTail.length
+			? scenarioTail.map((e) =>
+				`- \`${e.skillId}\` ${e.ok ? "OK" : "FAIL"} code=${e.code ?? "?"} ${e.detail ? `(${e.detail.slice?.(0, 120) ?? ""})` : ""} situ=${e.situationHashShort ?? "?"}`,
+			).join("\n")
+			: "_(no scenario memory)_";
+
+		const body = [
+			`# Wedged — escape-pit cannot extract the bot`,
+			"",
+			`The bot has produced ${WEDGED_FIRE_AT}+ "wedged-jump / escape-pit / blind" completions in a row.`,
+			"In-world it stands still; the existing escape primitives are not enough.",
+			"",
+			"## Current state",
+			"```json",
+			JSON.stringify(slim, null, 2),
+			"```",
+			"",
+			"## Last action result",
+			lastResult
+				? `\`${lastResult.label}\` → ${lastResult.code ?? (lastResult.ok ? "ok" : "fail")} ${lastResult.detail ? `(${JSON.stringify(lastResult.detail).slice(0, 200)})` : ""}`
+				: "_(none)_",
+			"",
+			"## Skill metrics",
+			metricsLine,
+			"",
+			"## World journal byKind",
+			journalLine,
+			"",
+			"## Recent scenario memory (last attempts)",
+			scenarioLines,
+			"",
+			"## Suggested fix",
+			"",
+			"Either improve `escapePit()` in `runtime/actions.js` (e.g. dig forward + down + side, not only up) OR add a NEW skill `recovery.tunnel-out` that breaks the bot out of a 1×1 hole by digging a 3-block tunnel in the most-free cardinal. Add tests under `runtime/skills/`.",
+			"",
+			"## Edit scope",
+			"- runtime/actions.js",
+			"- runtime/skills/",
+			"- runtime/reflex.js",
+			"",
+			"## Forbidden",
+			"- Don't touch `.env`, `state/`, `extensions/`, `tui/`, `package.json`.",
+			"- Don't add new npm dependencies.",
+		].join("\n");
+
+		return {
+			fire: true,
+			kind: "wedged-cant-escape",
+			summary: "bot wedged in place; escape-pit ran 3× without freeing it",
+			body,
+			editScope: ["runtime/actions.js", "runtime/skills/", "runtime/reflex.js"],
+		};
+	}
+
+	return { check, checkWedged, noteResult, reset };
 }

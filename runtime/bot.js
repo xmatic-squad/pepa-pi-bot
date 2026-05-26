@@ -245,6 +245,7 @@ function dispatchAction(fn, label, opts = {}) {
 				detail: res?.detail,
 			});
 			recordWorldDeltaToJournal(label, res, startSnap);
+			stuckIncident.noteResult(res);
 			if (!ok) {
 				lastFailureAt = lastResult.ts;
 				recordFailure(label, res?.detail);
@@ -794,6 +795,32 @@ function tick() {
 				appendDiary(`stuck-proposal filed: ${filename} (${stuck.summary})`);
 			} catch (e) {
 				warn("stuck", `writeProposal failed: ${e.message}`);
+			}
+		}
+
+		// Second fast-track trigger: explicit wedged loop (escape-pit ran N
+		// times in a row without freeing the bot). Auto-improve picks this
+		// up like any other proposal — Pi writes a new escape strategy.
+		const wedged = stuckIncident.checkWedged({
+			snapshot: lastSnapshot,
+			lastResult,
+			metrics: lastSnapshot.skillMetrics,
+			journalSummary: worldJournal.summary(),
+			scenarioTail: scenarioMemory.recentTailFor({ n: 12 }),
+			now,
+		});
+		if (wedged?.fire) {
+			try {
+				const { filename } = writeProposal({
+					kind: wedged.kind,
+					summary: wedged.summary,
+					body: wedged.body,
+					editScope: wedged.editScope,
+				});
+				warn("wedged", `filed ${filename}: ${wedged.summary}`);
+				appendDiary(`wedged-proposal filed: ${filename}`);
+			} catch (e) {
+				warn("wedged", `writeProposal failed: ${e.message}`);
 			}
 		}
 
