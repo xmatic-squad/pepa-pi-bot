@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { getSkill } from "./index.js";
+import { _internal as exploreFarInternal } from "./explore-far.js";
 import { digEscapeTunnel, _internal } from "./recovery-tunnel-out.js";
 
 function makePos(x, y, z) {
@@ -97,4 +98,26 @@ test("tunnel-out does not count jumping in place as escape", async () => {
 	assert.equal(res.ok, false);
 	assert.equal(res.code, "wedged");
 	assert.match(res.detail.error, /moved only 0\.00 horizontally/);
+});
+
+test("explore.far blind fallback does not report done when position is unchanged", async () => {
+	const blocks = {};
+	const bot = makeBot(blocks);
+	bot.look = async () => {};
+	bot.lookAt = async () => {};
+	bot.dig = async (block) => {
+		blocks[`${block.position.x},${block.position.y},${block.position.z}`] = "air";
+	};
+	bot.setControlState = () => {}; // no physics movement in this wedged simulation
+
+	const res = await exploreFarInternal.blindWalkOrTunnelOut(bot, {
+		yaw: 0,
+		dirName: "E",
+		blindMs: 0,
+		tunnelPushMs: 0,
+	});
+	assert.equal(res.ok, false);
+	assert.equal(res.code, "wedged");
+	assert.equal(res.detail.mode, "blind");
+	assert.equal(res.detail.dir, "E");
 });

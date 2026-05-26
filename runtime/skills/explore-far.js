@@ -122,23 +122,61 @@ export const skill = Object.freeze({
 			};
 		} catch (e) {
 			warn("action", `explore.far pathfinder failed: ${e.message} — continuing blind`);
-			try { await bot.look(best.yaw, 0, true); } catch {}
-			bot.setControlState("forward", true);
-			bot.setControlState("jump", true);
-			try {
-				await new Promise((r) => setTimeout(r, 7_000));
-			} finally {
-				bot.setControlState("forward", false);
-				bot.setControlState("jump", false);
-			}
-			return {
-				ok: true, code: "done",
-				detail: { mode: "blind", dir: best.name },
-				worldDelta: { movedTo: null },
-			};
+			return blindWalkOrTunnelOut(bot, {
+				yaw: best.yaw,
+				dirName: best.name,
+				blindMs: args.blindMs ?? 7_000,
+				tunnelPushMs: args.tunnelPushMs,
+				reason: `explore.far blind ${best.name}`,
+			});
 		}
 	},
 });
+
+async function blindWalkOrTunnelOut(bot, { yaw, dirName, blindMs = 7_000, minMove = 0.75, tunnelPushMs, reason = "blind fallback" } = {}) {
+	const before = clonePos(bot.entity.position);
+	try { await bot.look(yaw, 0, true); } catch {}
+	bot.setControlState("forward", true);
+	bot.setControlState("jump", true);
+	try {
+		await new Promise((r) => setTimeout(r, Math.max(0, blindMs)));
+	} finally {
+		bot.setControlState("forward", false);
+		bot.setControlState("jump", false);
+	}
+
+	const moved = horizontalDistance(before, bot.entity.position);
+	if (moved >= minMove) {
+		return {
+			ok: true,
+			code: "done",
+			detail: { mode: "blind-moved", previousMode: "blind", dir: dirName, moved },
+			worldDelta: { movedTo: clonePos(bot.entity.position) },
+		};
+	}
+
+	info("action", `explore.far: blind ${dirName} moved only ${moved.toFixed(2)} horizontally → tunnel-out`);
+	const tunnelArgs = { maxSteps: 3, reason };
+	if (tunnelPushMs !== undefined) tunnelArgs.pushMs = tunnelPushMs;
+	const tunnel = await digEscapeTunnel(bot, tunnelArgs);
+	const detail = { mode: "blind", dir: dirName, moved, recovery: tunnel.detail ?? null };
+	if (!tunnel.ok) {
+		return {
+			ok: false,
+			code: tunnel.code ?? "wedged",
+			detail,
+			worldDelta: tunnel.worldDelta ?? null,
+		};
+	}
+	return {
+		ok: true,
+		code: "done",
+		detail: { ...(tunnel.detail ?? {}), previousMode: "blind", recovered: true },
+		worldDelta: tunnel.worldDelta ?? { movedTo: clonePos(bot.entity.position) },
+	};
+}
+
+export const _internal = { blindWalkOrTunnelOut };
 
 const CARDINAL_YAWS = [
 	{ name: "N", yaw: Math.PI },

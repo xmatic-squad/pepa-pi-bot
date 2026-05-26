@@ -454,6 +454,7 @@ export async function wander(bot, radius = 12) {
 		return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, via: best.name } };
 	} catch (e) {
 		warn("action", `wander pathfinder failed: ${e.message} — continuing blind in ${best.name}`);
+		const beforeBlind = clonePos(bot.entity.position);
 		try { await bot.look(best.yaw, 0, true); } catch {}
 		bot.setControlState("forward", true);
 		bot.setControlState("jump", true);
@@ -463,7 +464,19 @@ export async function wander(bot, radius = 12) {
 			bot.setControlState("forward", false);
 			bot.setControlState("jump", false);
 		}
-		return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, mode: "blind", via: best.name } };
+		const moved = horizontalDistance(beforeBlind, bot.entity.position);
+		if (moved < 0.75) {
+			info("action", `wander: blind ${best.name} moved only ${moved.toFixed(2)} horizontally → tunnel-out`);
+			const tunnel = await digEscapeTunnel(bot, { maxSteps: 3, reason: `wander blind ${best.name}` });
+			const detail = { to: { x: tx, y: ty, z: tz }, mode: "blind", via: best.name, moved, recovery: tunnel.detail ?? null };
+			if (!tunnel.ok) return { ok: false, code: tunnel.code ?? "wedged", detail, worldDelta: tunnel.worldDelta ?? null };
+			return { ok: true, detail: { ...(tunnel.detail ?? {}), previousMode: "blind", recovered: true }, worldDelta: tunnel.worldDelta ?? null };
+		}
+		return {
+			ok: true,
+			detail: { to: { x: tx, y: ty, z: tz }, mode: "blind-moved", previousMode: "blind", via: best.name, moved },
+			worldDelta: { movedTo: clonePos(bot.entity.position) },
+		};
 	}
 }
 
