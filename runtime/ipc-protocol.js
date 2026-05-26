@@ -31,6 +31,8 @@ export const COMMAND_TYPES = Object.freeze({
 	CONV_SAY: "cmd:conv-say", // { topic, text, intent?, position? } append turn to a multi-agent topic
 	CONV_RECENT: "cmd:conv-recent", // { topic, n? } read last n turns
 	CONV_LIST: "cmd:conv-list", // list active conversation topics
+	SCREENSHOT: "cmd:screenshot", // { reason?, frames? } headless POV render to state/screenshots/
+	FORCE_INCIDENT: "cmd:force-incident", // { kind?, reason? } emulate a stuck-incident to demo critic + auto-improve pipeline
 });
 
 export function encodeFrame(obj) {

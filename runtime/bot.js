@@ -47,6 +47,7 @@ import { classifyIntent, INTENTS } from "./social/intent.js";
 import { generateReply } from "./social/reply.js";
 import { createChatMemory } from "./social/memory.js";
 import { openConversation, peekConversation, listConversations } from "./social/conversation.js";
+import { takeScreenshot } from "./viewer.js";
 import { createStuckIncidentDetector, attachCritique } from "./stuck-incident.js";
 import { requestCritique } from "./critic.js";
 import { createSkillMetrics } from "./skill-metrics.js";
@@ -956,7 +957,7 @@ function handleCommand(msg, send) {
 			const { topic: topic_, text, intent, position } = msg.payload ?? {};
 			if (!topic_ || !text) { send(EVENT_TYPES.ERROR, { source: "conv", text: "topic and text required" }); return; }
 			try {
-				const h = openConversation(topic_, { speaker: cfg.username });
+				const h = openConversation(topic_, { speaker: config.username });
 				const turn = h.append({ text, intent, position: position ?? lastSnapshot?.position });
 				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "conv", text: `say to ${topic_}`, details: turn });
 			} catch (e) { send(EVENT_TYPES.ERROR, { source: "conv", text: e.message }); }
@@ -976,6 +977,32 @@ function handleCommand(msg, send) {
 				const topics = listConversations();
 				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "conv", text: "list", details: { topics } });
 			} catch (e) { send(EVENT_TYPES.ERROR, { source: "conv", text: e.message }); }
+			break;
+		}
+		case COMMAND_TYPES.SCREENSHOT: {
+			const { reason, frames } = msg.payload ?? {};
+			(async () => {
+				if (!bot) { send(EVENT_TYPES.ERROR, { source: "viewer", text: "bot not connected" }); return; }
+				const res = await takeScreenshot(bot, { reason: reason ?? "ipc", frames: frames ?? 1 });
+				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "viewer", text: res.ok ? `screenshot ok` : `screenshot fail`, details: res });
+			})();
+			break;
+		}
+		case COMMAND_TYPES.FORCE_INCIDENT: {
+			const { kind, reason } = msg.payload ?? {};
+			(async () => {
+				const fakeIncident = {
+					kind: kind ?? "force-demo",
+					summary: `forced incident: ${reason ?? "operator demo"}`,
+					body: stuckIncident._renderFake
+						? stuckIncident._renderFake({ snapshot: lastSnapshot, lastResult, reason: reason ?? "operator demo" })
+						: `# Forced incident\n\nOperator triggered via cmd:force-incident.\n\n## Snapshot\n\n\`\`\`json\n${JSON.stringify(lastSnapshot ?? {}, null, 2).slice(0, 2000)}\n\`\`\`\n\n## Last action\n\n${lastResult ? `\`${lastResult.label}\` → ${lastResult.code}` : "_(none)_"}\n\n## Suggested fix\n\nReview the snapshot and propose a productive next skill, or document why no productive action is possible from this state.\n\n## Edit scope\n\n- runtime/skills/\n- runtime/reflex.js\n`,
+					editScope: ["runtime/skills/", "runtime/reflex.js"],
+				};
+				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "force", text: `dispatching critic for ${fakeIncident.kind}` });
+				await filePostCritique(fakeIncident, "force");
+				send(EVENT_TYPES.LOG, { ts: new Date().toISOString(), level: "info", source: "force", text: `force-incident done — check state/proposals/` });
+			})();
 			break;
 		}
 		default:
