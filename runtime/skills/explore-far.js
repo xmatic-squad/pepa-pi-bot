@@ -152,8 +152,12 @@ function clonePos(pos) {
 	return { x: pos?.x ?? 0, y: pos?.y ?? 0, z: pos?.z ?? 0 };
 }
 
-function movedDistance(a, b) {
-	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.y ?? 0) - (a?.y ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+function horizontalDistance(a, b) {
+	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+}
+
+function verticalGain(a, b) {
+	return (b?.y ?? 0) - (a?.y ?? 0);
 }
 
 async function escapePit(bot, maxSteps = 3) {
@@ -182,16 +186,21 @@ async function escapePit(bot, maxSteps = 3) {
 		await new Promise((r) => setTimeout(r, 400));
 	}
 
-	const moved = movedDistance(before, bot.entity.position);
-	if (moved >= 0.75) {
+	// Let jump physics settle before deciding whether escape-pit worked.
+	// A mid-jump Y delta is not freedom; require horizontal movement or a
+	// sustained one-block climb before reporting success.
+	await new Promise((r) => setTimeout(r, 500));
+	const moved = horizontalDistance(before, bot.entity.position);
+	const climbed = verticalGain(before, bot.entity.position);
+	if (moved >= 0.75 || climbed >= 0.9) {
 		return {
 			ok: true,
 			code: "done",
-			detail: { mode: "escape-pit-up", moved },
+			detail: { mode: "escape-pit-up", moved, climbed },
 			worldDelta: { mode: "escape-pit-up", movedTo: clonePos(bot.entity.position) },
 		};
 	}
-	info("action", `escape-pit moved only ${moved.toFixed(2)} blocks → tunnel-out`);
+	info("action", `escape-pit moved only ${moved.toFixed(2)} horizontally (dy=${climbed.toFixed(2)}) → tunnel-out`);
 	return digEscapeTunnel(bot, { maxSteps: 3, reason: "explore.far escape-pit" });
 }
 

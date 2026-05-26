@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { getSkill } from "./index.js";
-import { _internal } from "./recovery-tunnel-out.js";
+import { digEscapeTunnel, _internal } from "./recovery-tunnel-out.js";
 
 function makePos(x, y, z) {
 	return {
@@ -68,4 +68,30 @@ test("safe dig guard allows natural blocks and rejects build/storage blocks", ()
 	assert.equal(_internal.isSafeTunnelDigTarget(bot, makeBlock("oak_planks", 1, 64, 0)), false);
 	assert.equal(_internal.isSafeTunnelDigTarget(bot, makeBlock("chest", 1, 64, 0)), false);
 	assert.equal(_internal.isSafeTunnelDigTarget(bot, makeBlock("bedrock", 1, 64, 0)), false);
+});
+
+test("tunnel-out does not count jumping in place as escape", async () => {
+	const blocks = {};
+	for (let step = 1; step <= 3; step++) {
+		blocks[`0,64,${-step}`] = "air";
+		blocks[`0,65,${-step}`] = "air";
+		blocks[`0,63,${-step}`] = "dirt";
+	}
+	// Make the other cardinals unusable so the test exercises one clean
+	// tunnel candidate and then verifies vertical-only movement is rejected.
+	blocks["1,64,0"] = "oak_planks";
+	blocks["0,64,1"] = "oak_planks";
+	blocks["-1,64,0"] = "oak_planks";
+
+	const bot = makeBot(blocks);
+	bot.setControlState = (control, on) => {
+		if (control === "jump" && on) {
+			bot.entity.position = makePos(bot.entity.position.x, bot.entity.position.y + 1, bot.entity.position.z);
+		}
+	};
+
+	const res = await digEscapeTunnel(bot, { maxSteps: 3, minMove: 0.75, pushMs: 0 });
+	assert.equal(res.ok, false);
+	assert.equal(res.code, "wedged");
+	assert.match(res.detail.error, /moved only 0\.00 horizontally/);
 });

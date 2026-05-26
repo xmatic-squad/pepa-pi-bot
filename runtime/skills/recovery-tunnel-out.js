@@ -147,8 +147,12 @@ function centerOf(pos) {
 	return { x: (pos?.x ?? 0) + 0.5, y: (pos?.y ?? 0) + 0.5, z: (pos?.z ?? 0) + 0.5 };
 }
 
-function distance(a, b) {
-	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.y ?? 0) - (a?.y ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+function horizontalDistance(a, b) {
+	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+}
+
+function verticalDelta(a, b) {
+	return (b?.y ?? 0) - (a?.y ?? 0);
 }
 
 function isLiquidBlock(block) {
@@ -329,17 +333,18 @@ export async function digEscapeTunnel(bot, { maxSteps = 3, minMove = 0.75, pushM
 				await digOne(bot, target.block);
 			}
 			await pushForward(bot, dir.yaw, pushMs);
-			const moved = distance(before, bot.entity.position);
+			const moved = horizontalDistance(before, bot.entity.position);
+			const movedY = verticalDelta(before, bot.entity.position);
 			if (moved >= minMove) {
 				const movedTo = posClone(bot.entity.position);
 				return {
 					ok: true,
 					code: "done",
-					detail: { mode: "tunnel-out", dir: dir.name, moved, dug: dir.digTargets.length },
+					detail: { mode: "tunnel-out", dir: dir.name, moved, movedY, dug: dir.digTargets.length },
 					worldDelta: { mode: "tunnel-out", movedTo },
 				};
 			}
-			lastError = `dug ${dir.name} but moved only ${moved.toFixed(2)}`;
+			lastError = `dug ${dir.name} but moved only ${moved.toFixed(2)} horizontally (dy=${movedY.toFixed(2)})`;
 			warn("action", `tunnel-out: ${lastError}`);
 		} catch (e) {
 			lastError = e?.message ?? String(e);

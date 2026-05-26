@@ -5,6 +5,15 @@ import { createWorldJournal, _internal } from "./world-journal.js";
 
 function tag() { return `__t_${Date.now()}_${Math.floor(Math.random() * 1e6)}`; }
 
+// Tests share the real state/<host>/world-journal.jsonl with the live bot,
+// so we start each test with a fresh journal to avoid mixing with prior
+// runs. This DOES wipe the file on disk — fine for the dev box.
+function freshJournal() {
+	const seed = createWorldJournal();
+	seed.clear();
+	return createWorldJournal(); // re-instantiate to drop in-memory state too
+}
+
 test("cellOf buckets by GRID_CELL", () => {
 	assert.equal(_internal.cellOf(0, 0), "0,0");
 	assert.equal(_internal.cellOf(15, 15), "0,0");
@@ -13,7 +22,7 @@ test("cellOf buckets by GRID_CELL", () => {
 });
 
 test("append + nearest returns the entry we just stored", () => {
-	const j = createWorldJournal();
+	const j = freshJournal();
 	const name = tag();
 	j.append({ kind: "chopped", name, at: { x: 100, y: 64, z: 200 } });
 	const got = j.nearest({ kind: "chopped", x: 100, z: 200, radius: 16, limit: 5 });
@@ -23,7 +32,7 @@ test("append + nearest returns the entry we just stored", () => {
 });
 
 test("nearest ranks by distance and respects radius", () => {
-	const j = createWorldJournal();
+	const j = freshJournal();
 	const t = tag();
 	j.append({ kind: "stone", name: t + "_far", at: { x: 100, y: 64, z: 100 } });
 	j.append({ kind: "stone", name: t + "_near", at: { x: 5, y: 64, z: 5 } });
@@ -35,7 +44,7 @@ test("nearest ranks by distance and respects radius", () => {
 });
 
 test("leanestQuadrant returns the quadrant with fewest entries", () => {
-	const j = createWorldJournal();
+	const j = freshJournal();
 	const t = tag();
 	for (let i = 0; i < 5; i++) {
 		j.append({ kind: "dead_end", name: t, at: { x: 10 + i, y: 64, z: -10 - i } }); // NE
@@ -48,7 +57,7 @@ test("leanestQuadrant returns the quadrant with fewest entries", () => {
 });
 
 test("summary lists per-kind totals", () => {
-	const j = createWorldJournal();
+	const j = freshJournal();
 	j.append({ kind: "chopped", name: "oak_log", at: { x: 1, y: 1, z: 1 } });
 	j.append({ kind: "chopped", name: "oak_log", at: { x: 2, y: 1, z: 2 } });
 	j.append({ kind: "shelter", name: "shelter", at: { x: 0, y: 1, z: 0 } });

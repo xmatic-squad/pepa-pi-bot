@@ -51,31 +51,36 @@ function listPendingProposals() {
 }
 
 function spawnPatcher(filename) {
-	info("auto-improve", `spawning auto-patch for ${filename}`);
+	info("auto-improve", `spawning auto-patch for ${filename} (detached)`);
 	inFlight = true;
+	// detached:true so the auto-patch child survives a supervisor restart
+	// (which fires every time auto-patch's own commit lands and supervisor
+	// notices runtime/*.js changed). Without this, Pi can write a perfect
+	// commit on an auto/* branch but auto-patch gets killed BEFORE the
+	// cherry-pick step. Observed live 2026-05-26: lost an
+	// eb29591-quality fix that way; recovered manually via git
+	// reflog + cherry-pick. We also pipe stdout/stderr to a log file
+	// per-run so the operator can see Pi's full output later.
+	const logPath = path.join(REPO_ROOT, "state", "_auto-patch-last.log");
+	let logFd;
+	try { logFd = fs.openSync(logPath, "w"); } catch { logFd = "ignore"; }
 	const child = spawn(process.execPath, [PATCH_SCRIPT, filename], {
 		cwd: REPO_ROOT,
-		stdio: ["ignore", "pipe", "pipe"],
+		stdio: ["ignore", logFd, logFd],
 		env: { ...process.env },
-		detached: false,
+		detached: true,
 	});
-	let stdoutBuf = "";
-	let stderrBuf = "";
-	child.stdout.on("data", (c) => {
-		stdoutBuf += c.toString();
-	});
-	child.stderr.on("data", (c) => {
-		stderrBuf += c.toString();
-	});
+	child.unref(); // critical: parent (bot.js) can exit without waiting
 	child.on("exit", (code) => {
 		inFlight = false;
 		lastFinishedAt = Date.now();
 		recentRuns.push(lastFinishedAt);
-		const tail = (stdoutBuf + "\n" + stderrBuf).trim().split("\n").slice(-3).join(" | ");
-		if (code === 0) info("auto-improve", `patch applied for ${filename}: ${tail}`);
-		else warn("auto-improve", `patch did not apply (code=${code}) for ${filename}: ${tail}`);
-		// We do NOT trigger supervisor restart manually — the supervisor's
-		// fs.watch on runtime/*.js fires the moment the cherry-pick lands.
+		if (code === 0) info("auto-improve", `patch applied for ${filename} (see ${logPath} for full output)`);
+		else warn("auto-improve", `patch did not apply (code=${code}) for ${filename} (see ${logPath})`);
+	});
+	child.on("error", (e) => {
+		warn("auto-improve", `spawn error: ${e.message}`);
+		inFlight = false;
 	});
 }
 
