@@ -370,22 +370,22 @@ function metricRecoverySkill(ctx, plannedSkillId) {
 	return null;
 }
 
-// v0.2.0-rc.3 — wedged-emergency escape. When the bot has been at the
-// same coarse position for ≥ 60s AND the runtime says we're stuck
-// ("wedged", "no_reachable_target"), AND there's no immediate hostile
-// (defendReflex would have handled it), AND we have a placeable block
-// in inventory, dispatch survive.pillar-up to climb vertically out of
-// pit terrain. This breaks the tunnel-out-fail-fall-back-to-flee loop
-// observed live in the rc.2 deploy.
+// v0.2.0-rc.3 — wedged-emergency escape. When the bot has not made
+// meaningful horizontal progress for ≥ 60s AND there's no immediate
+// hostile (defendReflex would have handled it) AND a placeable block
+// is in inventory, dispatch survive.pillar-up to climb vertically out
+// of pit terrain. Breaks the tunnel-out-fail-fall-back-to-flee loop
+// observed live in the rc.2 deploy. noProgressReason is a hint, not
+// required — pillar-up only writes blocks underneath, so even if the
+// real cause is something else, the worst case is +1 dirt placed.
 const WEDGED_MIN_MS = 60_000;
-const WEDGED_REASONS = new Set(["no_reachable_target", "awaiting_action_cooldown", "planner_empty"]);
 
 function wedgedEscapeSkill(ctx) {
 	const s = ctx.snapshot;
 	if (!s) return null;
 	if (s.closestHostile && (s.closestHostile.distance ?? Infinity) < 6) return null;
-	if (!WEDGED_REASONS.has(s.noProgressReason)) return null;
 	const lastMove = ctx.lastSignificantMoveAt ?? 0;
+	if (!lastMove) return null; // need at least one tick of position tracking
 	if (Date.now() - lastMove < WEDGED_MIN_MS) return null;
 	// Last attempted escape was recent? give it room.
 	if (ctx.skillBackoff?.["survive.pillar-up"] && Date.now() < ctx.skillBackoff["survive.pillar-up"]) {
