@@ -25,6 +25,7 @@ import {
 	wander,
 } from "./actions.js";
 import { runSkill, getSkill } from "./skills/index.js";
+import { consult as consultAdvice, reportOutcome as reportAdviceOutcome } from "./coach/advice.js";
 import { situationHash } from "./scenario-memory.js";
 import { tickModes } from "./modes.js";
 
@@ -198,6 +199,15 @@ function defendReflex(ctx) {
 		}
 		if (shouldRetreatFromStuckAttack(ctx, hostile.name)) {
 			ctx.defendAttackStuck = null;
+			return dispatchDefendFlee(ctx, hostile, dist, { ignoreCooldown: true });
+		}
+		// v0.2.0 — consult learned lessons. If knowledge says "do not
+		// attack <hostile> in this state" (e.g. creeper rule, or no-weapon
+		// rule learned from post-mortems), flee instead. This is the
+		// closing of the learning loop for emergency combat.
+		const advice = consultAdvice({ plannedSkillId: `attack ${hostile.name}`, snapshot: s });
+		if (advice.action === "avoid" || advice.action === "override") {
+			if (advice.lessonId) reportAdviceOutcome({ lessonId: advice.lessonId, succeeded: false });
 			return dispatchDefendFlee(ctx, hostile, dist, { ignoreCooldown: true });
 		}
 		ctx.dispatch(
@@ -441,10 +451,26 @@ function curriculumReflex(ctx) {
 		}
 	}
 
+	// v0.2.0 — consult learned lessons. If a high-confidence lesson says
+	// "avoid <skillId> in this situation", swap to its preferred
+	// alternative (or back off entirely if no safe alternative is named).
+	const advice = consultAdvice({ plannedSkillId: skillId, snapshot: ctx.snapshot });
+	let dispatchSkillId = skillId;
+	if (advice.action === "avoid") {
+		ctx.skillBackoff = ctx.skillBackoff ?? {};
+		ctx.skillBackoff[skillId] = Date.now() + SKILL_BACKOFF_MS;
+		ctx.skillBackoff["__wander_hint__"] = Date.now() + SKILL_BACKOFF_MS;
+		return { action: "noop", kind: "curriculum-advice-avoid", label: skillId, lessonId: advice.lessonId };
+	}
+	if (advice.action === "override" && advice.overrideSkillId) {
+		dispatchSkillId = advice.overrideSkillId;
+	}
+
 	ctx.lastCurriculumAt = Date.now();
-	ctx.dispatch(() => runSkill(skillId, ctx), skillId, {
+	ctx.dispatch(() => runSkill(dispatchSkillId, ctx), dispatchSkillId, {
 		onComplete: (res) => {
 			ctx.skillBackoff = ctx.skillBackoff ?? {};
+			if (advice.lessonId) reportAdviceOutcome({ lessonId: advice.lessonId, succeeded: !!res?.ok });
 			if (res?.recovery?.hint === "wander") {
 				// Same fix the old autonomous reflex applied for "no reachable
 				// log" — switch to exploration for a minute.
@@ -456,7 +482,7 @@ function curriculumReflex(ctx) {
 				// retried on the very next tick. Hold for SKILL_BACKOFF_MS.
 				const cooldownCodes = new Set(["missing_tool", "missing_material", "no_target", "no_food_source", "unsupported_version", "no_chest", "no_space", "nothing_to_deposit"]);
 				if (cooldownCodes.has(res?.code)) {
-					ctx.skillBackoff[skillId] = Date.now() + SKILL_BACKOFF_MS;
+					ctx.skillBackoff[dispatchSkillId] = Date.now() + SKILL_BACKOFF_MS;
 				}
 			} else {
 				// Success clears the wander hint immediately.
@@ -465,7 +491,7 @@ function curriculumReflex(ctx) {
 			}
 		},
 	});
-	return { action: "dispatched", kind: "curriculum-skill", label: skillId };
+	return { action: "dispatched", kind: "curriculum-skill", label: dispatchSkillId };
 }
 
 // ---- idle ------------------------------------------------------------------
