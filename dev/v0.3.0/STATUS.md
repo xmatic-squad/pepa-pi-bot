@@ -108,7 +108,51 @@ Tests: 315 green (was 279 on rc.1, +36 new):
 - `runtime/reflex.test.js` — 2 new integration tests (manifesto-on
   overrides curriculum; well-fed bot pursues tools_stone)
 
-### rc.3 — (pending) Event-driven awareness + skill pre-emption
+### rc.3 — Event-driven awareness + skill pre-emption
+**Root problem solved**: in v0.2.x the reflex was purely polling. The
+loop took a snapshot every DISPATCH_INTERVAL_MS (~2s) and decided what
+to do, but anything that happened **between** ticks was invisible.
+Concretely: when the operator dug a path that let the bot fall to a
+new area, the bot continued executing its prior `explore.far` against
+stale assumptions until the next tick. By then it had wandered further
+off course, and the cycle never broke. Same problem for hostile spawns
+and HP plunges — the reflex saw them only after the current skill ran
+its 30-90s timeout.
+
+This rc gives the reflex an event-driven layer that **preempts** the
+in-flight skill within ~100ms of an environmental shock.
+
+- [`runtime/awareness/events.js`](../../runtime/awareness/events.js) —
+  wires direct `bot.on(...)` listeners and surfaces them as flags + an
+  optional preempt callback:
+  - `bot.on("move")` — single-tick position jump ≥ 5 blocks (teleport,
+    fall, pathfinder snap, operator pushed us) → `forced_move`
+  - `bot.on("health")` — HP drop ≥ 2 in one tick → `health_plunge`
+  - `bot.on("entitySpawn")` — hostile mob spawns within 12 blocks →
+    `hostile_added`
+  - `bot.on("blockUpdate")` — block change within manhattan 4 →
+    `env_changed` (informational only, NOT preempting; throttled 800ms)
+- [`runtime/skills/index.js`](../../runtime/skills/index.js):
+  - `RUNNER_CODES.PREEMPTED` — new stable failure code
+  - `runSkill()` now races `execute()` with `ctx.abortSignal`. If the
+    signal fires mid-await, the skill returns `{ ok: false, code:
+    "preempted" }` within one microtask — no skill code change needed.
+    Long-running skills (`gather.logs`, `explore.far`,
+    `recovery.tunnel-out`, `survive.pillar-up`) get this for free.
+- [`runtime/bot.js`](../../runtime/bot.js):
+  - `dispatchAction` creates a fresh `AbortController` per dispatch
+    and stores it on `reflexCtx.currentAbort` + `reflexCtx.abortSignal`
+  - `bot.once("spawn")` calls `attachAwareness(bot, {onPreempt})`
+    where `onPreempt` aborts the current dispatch
+  - `reflexCtx.lastPreempt` records the most recent shock for
+    snapshot/telemetry consumers
+
+Tests: 332 green (was 315 on rc.2, +17 new):
+- `runtime/awareness/events.test.js` — 12 tests (each event type,
+  thresholds, throttling, hostile filter)
+- `runtime/skills/contract.test.js` — 3 new preempt tests (mid-flight
+  abort, pre-armed signal, clean signal doesn't interfere)
+- 2 extra contract sanity checks shaken out by signal plumbing
 
 ## Next session quick start
 

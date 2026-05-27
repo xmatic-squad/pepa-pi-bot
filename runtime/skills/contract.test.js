@@ -166,3 +166,63 @@ test("result missing code defaults to runner DONE on success", async () => {
 		teardown();
 	}
 });
+
+test("abortSignal: mid-execute abort surfaces code: preempted", async () => {
+	const teardown = _registerForTest({
+		id: "test.preempt-midflight",
+		timeoutMs: 5000,
+		preconditions: () => ({ ok: true }),
+		execute: async () => {
+			await new Promise((r) => setTimeout(r, 1500));
+			return { ok: true };
+		},
+	});
+	const controller = new AbortController();
+	const runP = runSkill("test.preempt-midflight", { abortSignal: controller.signal });
+	setTimeout(() => controller.abort(), 30);
+	try {
+		const res = await runP;
+		assert.equal(res.ok, false);
+		assert.equal(res.code, RUNNER_CODES.PREEMPTED);
+	} finally {
+		teardown();
+	}
+});
+
+test("abortSignal: pre-aborted signal short-circuits to preempted", async () => {
+	const teardown = _registerForTest({
+		id: "test.preempt-prearm",
+		timeoutMs: 5000,
+		preconditions: () => ({ ok: true }),
+		execute: async () => {
+			await new Promise((r) => setTimeout(r, 200));
+			return { ok: true };
+		},
+	});
+	const controller = new AbortController();
+	controller.abort();
+	try {
+		const res = await runSkill("test.preempt-prearm", { abortSignal: controller.signal });
+		assert.equal(res.ok, false);
+		assert.equal(res.code, RUNNER_CODES.PREEMPTED);
+	} finally {
+		teardown();
+	}
+});
+
+test("abortSignal: not aborted → skill completes normally", async () => {
+	const teardown = _registerForTest({
+		id: "test.preempt-clear",
+		timeoutMs: 5000,
+		preconditions: () => ({ ok: true }),
+		execute: async () => ({ ok: true, code: "done" }),
+	});
+	const controller = new AbortController();
+	try {
+		const res = await runSkill("test.preempt-clear", { abortSignal: controller.signal });
+		assert.equal(res.ok, true);
+		assert.equal(res.code, "done");
+	} finally {
+		teardown();
+	}
+});
