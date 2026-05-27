@@ -1698,6 +1698,15 @@ export default function mineflayerBridge(pi: ExtensionAPI) {
 		startupMemoryReviewed = false;
 		lastHumanChatAt = Date.now();
 		lastAutonomyPromptAt = 0;
+		// v0.2.0-rc.2: in headless subprocess mode (banter/coach/planner spawning
+		// `pi -p`), the hybrid runtime is already holding the MC nickname.
+		// A second `connect("startup")` would race for the same player slot and
+		// the server would kick one of them. Skip the bridge entirely.
+		if (process.env.PEPA_HEADLESS === "1") {
+			log("startup-skip", "PEPA_HEADLESS=1 — skipping MC bridge (hybrid runtime owns the connection)");
+			if (ctx.hasUI) ctx.ui.setStatus("mineflayer", "mc: bridged (headless)");
+			return;
+		}
 		try {
 			const current = ensureConfig();
 			ensureMemoryLayout(current);

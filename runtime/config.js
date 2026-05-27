@@ -1,5 +1,6 @@
 import { config as loadDotenv } from "dotenv";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -7,6 +8,26 @@ const __dirname = path.dirname(__filename);
 export const REPO_ROOT = path.resolve(__dirname, "..");
 
 loadDotenv({ path: path.join(REPO_ROOT, ".env") });
+
+// v0.2.0-rc.2: detect that we're running under the node test runner so the
+// log / scenario-memory / world-journal / knowledge modules redirect their
+// writes to a tmp dir instead of the live state/<host>/ directory. Without
+// this guard, every `npm test` poisons live scenarios.jsonl, world-journal,
+// and the daily log file — and the learning loop can pick test rows up as
+// real experience.
+function detectTestContext() {
+	if (process.env.PEPA_STATE_DIR) return process.env.PEPA_STATE_DIR;
+	const execArgv = process.execArgv || [];
+	const argv = process.argv || [];
+	const isNodeTest = execArgv.includes("--test")
+		|| argv.includes("--test")
+		|| argv.some((a) => typeof a === "string" && /\.test\.[mc]?[jt]sx?$/.test(a));
+	if (isNodeTest) {
+		return path.join(os.tmpdir(), `pepa-test-state-${process.pid}`);
+	}
+	return null;
+}
+const TEST_STATE_DIR = detectTestContext();
 
 function req(name) {
 	const v = process.env[name]?.trim();
@@ -64,7 +85,12 @@ export const config = Object.freeze({
 });
 
 export const serverKey = `${host}_${port}`;
-export const stateDir = path.join(REPO_ROOT, "state", serverKey);
+// Tests get an isolated tmp dir so they don't pollute live scenarios/journal/log.
+// Override via PEPA_STATE_DIR if you need a custom location.
+export const stateDir = TEST_STATE_DIR
+	? path.resolve(TEST_STATE_DIR)
+	: path.join(REPO_ROOT, "state", serverKey);
+export const isTestStateDir = !!TEST_STATE_DIR;
 export const socketPath = path.join(stateDir, "bot.sock");
 
 // Redacted env view for logs — never include the AuthMe password.

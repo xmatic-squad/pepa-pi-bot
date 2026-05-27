@@ -8,7 +8,7 @@ import { initKnowledge, record } from "../knowledge/index.js";
 import { __resetForTests, isAvailable, closeStore } from "../knowledge/store.js";
 import { consult, reportOutcome, __testing } from "./advice.js";
 
-const { SAFE_OVERRIDES } = __testing;
+const { SAFE_OVERRIDES, MODE_TO_SKILL, normalisePreferSkill } = __testing;
 
 async function bootstrap() {
 	__resetForTests();
@@ -94,4 +94,49 @@ test("SAFE_OVERRIDES: only contains known reflex skills", () => {
 	for (const id of SAFE_OVERRIDES) {
 		assert.ok(typeof id === "string" && id.includes("."), `${id} looks like a real skill id`);
 	}
+});
+
+test("normalisePreferSkill: mode names translate to skill ids", () => {
+	assert.equal(normalisePreferSkill("self_preservation"), "survive.flee");
+	assert.equal(normalisePreferSkill("night_shelter"), "survive.sleep");
+	assert.equal(normalisePreferSkill("hunger"), "survive.eat");
+	assert.equal(normalisePreferSkill("shelter"), "village.build-shelter");
+	assert.equal(normalisePreferSkill("flee"), "survive.flee");
+	assert.equal(normalisePreferSkill("eat"), "survive.eat");
+	assert.equal(normalisePreferSkill("tunnel-out"), "recovery.tunnel-out");
+	assert.equal(normalisePreferSkill("tunnel_out"), "recovery.tunnel-out");
+});
+
+test("normalisePreferSkill: 'survive_flee' shape gets translated to dot form", () => {
+	assert.equal(normalisePreferSkill("survive_flee"), "survive.flee");
+	assert.equal(normalisePreferSkill("survive sleep"), "survive.sleep");
+});
+
+test("normalisePreferSkill: passes through known dot-form skills unchanged", () => {
+	assert.equal(normalisePreferSkill("survive.flee"), "survive.flee");
+	assert.equal(normalisePreferSkill("explore.far"), "explore.far");
+});
+
+test("normalisePreferSkill: unknown values returned as-is", () => {
+	assert.equal(normalisePreferSkill("some.unknown.skill"), "some.unknown.skill");
+	assert.equal(normalisePreferSkill(null), null);
+	assert.equal(normalisePreferSkill(""), "");
+});
+
+test("consult: Pi-style mode-name prefer is normalised to override target", async () => {
+	const tmp = await bootstrap();
+	if (!isAvailable()) { cleanup(tmp); return; }
+	const { id } = (await import("../knowledge/index.js")).record({
+		text: "After a death at night, prefer shelter.",
+		category: "survival",
+		triggerSkill: "gather.logs",
+		avoidSkill: "gather.logs",
+		preferSkill: "night_shelter", // Pi gave a mode name, not a skill id
+		confidence: 0.9,
+		source: "test",
+	});
+	const res = consult({ plannedSkillId: "gather.logs", snapshot: {} });
+	assert.equal(res.action, "override");
+	assert.equal(res.overrideSkillId, "survive.sleep", "night_shelter mapped to survive.sleep");
+	cleanup(tmp);
 });

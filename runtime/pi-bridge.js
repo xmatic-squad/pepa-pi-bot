@@ -14,7 +14,10 @@ export function askPi({ prompt, onChunk, onDone, cwd, signal }) {
 
 	const child = spawn(PI_BIN, ["-p", prompt], {
 		cwd: cwd || process.cwd(),
-		env: { ...process.env, CI: "1" },
+		// PEPA_HEADLESS=1 tells extensions/mineflayer-bridge.ts (loaded by the
+		// Pi subprocess) NOT to open its own MC connection. The hybrid runtime
+		// already owns the nickname; a second connection races for the slot.
+		env: { ...process.env, CI: "1", PEPA_HEADLESS: "1" },
 		stdio: ["ignore", "pipe", "pipe"],
 		signal,
 	});
