@@ -45,6 +45,7 @@ function makeCtx({
 	lastEatAt = 0,
 	lastSleepAttemptAt = 0,
 	lastCurriculumAt = 0,
+	metrics,
 } = {}) {
 	const dispatches = [];
 	const ctx = {
@@ -56,6 +57,7 @@ function makeCtx({
 		lastSleepAttemptAt,
 		lastCurriculumAt,
 		skillBackoff,
+		metrics,
 		dispatch(fn, label, opts = {}) {
 			dispatches.push({ fn, label, opts });
 		},
@@ -80,6 +82,23 @@ test("disconnected snapshot → no dispatch", () => {
 	const out = runTick(ctx);
 	assert.equal(out, null);
 	assert.equal(dispatches.length, 0);
+});
+
+test("mode hit dispatches the returned skill immediately", () => {
+	const { ctx, dispatches } = makeCtx({
+		snapshot: {
+			connected: true,
+			health: 4,
+			food: 10,
+			hasFood: true,
+			inventory: { bread: 1 },
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "mode:self_preservation");
+	assert.equal(out.action, "dispatched");
+	assert.equal(dispatches[0].label, "survive.eat");
 });
 
 test("defend wins over curriculum when hostile in melee", () => {
@@ -277,6 +296,74 @@ test("wander-hint backoff swaps skill for wander on the next tick", () => {
 	const out = runTick(ctx);
 	assert.equal(out.reflex, "curriculum");
 	assert.equal(dispatches[0].label, "wander");
+});
+
+test("recent repeated skill timeouts trigger metric recovery", () => {
+	const now = Date.now();
+	const { ctx, dispatches } = makeCtx({
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			isDay: true,
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+		metrics: {
+			snapshot: () => ({
+				"gather.logs": { ok: 0, fail: 3, lastTs: now, lastCode: "timeout" },
+			}),
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	assert.equal(out.kind, "curriculum-metric-recovery");
+	assert.equal(dispatches[0].label, "explore.far");
+	assert.ok((ctx.skillBackoff?.["gather.logs"] ?? 0) > Date.now());
+});
+
+test("recent movement timeouts trigger tunnel recovery", () => {
+	const now = Date.now();
+	const { ctx, dispatches } = makeCtx({
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			isDay: true,
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+		metrics: {
+			snapshot: () => ({
+				"explore.far": { ok: 0, fail: 1, lastTs: now, lastCode: "timeout" },
+			}),
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	assert.equal(out.kind, "curriculum-metric-recovery");
+	assert.equal(dispatches[0].label, "recovery.tunnel-out");
+});
+
+test("successful tunnel recovery clears movement-timeout trigger", () => {
+	const now = Date.now();
+	const { ctx, dispatches } = makeCtx({
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			isDay: true,
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+		metrics: {
+			snapshot: () => ({
+				"explore.far": { ok: 0, fail: 1, lastTs: now - 5_000, lastCode: "timeout" },
+				"recovery.tunnel-out": { ok: 1, fail: 0, lastTs: now, lastCode: "done" },
+			}),
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	assert.equal(out.kind, "curriculum-skill");
+	assert.equal(dispatches[0].label, "gather.logs");
 });
 
 test("onComplete sets wander hint when skill recovery says so", () => {

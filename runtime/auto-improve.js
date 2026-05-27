@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { stateDir } from "./config.js";
+import { config, stateDir } from "./config.js";
 import { info, warn } from "./log.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,8 +25,8 @@ const PATCH_SCRIPT = path.join(REPO_ROOT, "scripts", "auto-patch.js");
 const PROPOSALS_DIR = path.join(stateDir, "proposals");
 
 const DEBOUNCE_MS = 10_000;
-const COOLDOWN_MS = 15 * 60 * 1000;
-const MAX_TOTAL_PER_HOUR = 4;
+const COOLDOWN_MS = config.autoImproveCooldownMs;
+const MAX_TOTAL_PER_HOUR = config.autoImproveMaxPerHour;
 
 let inFlight = false;
 let lastFinishedAt = 0;

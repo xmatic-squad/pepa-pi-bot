@@ -56,6 +56,7 @@ import { requestCritique } from "./critic.js";
 import { createSkillMetrics } from "./skill-metrics.js";
 import { createWorldJournal } from "./world-journal.js";
 import { createScenarioMemory, situationHash } from "./scenario-memory.js";
+import { createOwnedBlocksLedger } from "./owned-blocks.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -81,10 +82,14 @@ let lastEscalationAt = 0;
 // future Telegram/diary surfaces) can answer "what is the bot doing and why
 // isn't it doing more?" without parsing the log stream.
 const noProgress = createNoProgressDetector();
-const stuckIncident = createStuckIncidentDetector();
+const stuckIncident = createStuckIncidentDetector({
+	thresholdMs: config.stuckThresholdMs,
+	cooldownMs: config.stuckCooldownMs,
+});
 const skillMetrics = createSkillMetrics();
 const worldJournal = createWorldJournal();
 const scenarioMemory = createScenarioMemory();
+const ownedBlocks = createOwnedBlocksLedger();
 let lastResult = null; // { label, ok, code, detail, ts }
 let lastFailureAt = 0;
 let lastPlanReadAt = 0;
@@ -109,6 +114,8 @@ const reflexCtx = {
 	dispatch: dispatchAction,
 	journal: worldJournal,
 	memory: scenarioMemory,
+	metrics: skillMetrics,
+	owned: ownedBlocks,
 };
 
 let chatTimestamps = [];
@@ -186,6 +193,9 @@ function recordWorldDeltaToJournal(label, res, snapshot) {
 		if (wd.placedAt) worldJournal.append({ kind: "placed", name: wd.placedType ?? "block", at: wd.placedAt });
 		if (wd.baseAt) worldJournal.append({ kind: "base", name: "base", at: wd.baseAt });
 		if (wd.shelterAt) worldJournal.append({ kind: "shelter", name: "shelter", at: wd.shelterAt });
+		if (wd.chestAt) worldJournal.append({ kind: "chest", name: "storage", at: wd.chestAt });
+		if (wd.fledTo) worldJournal.append({ kind: "retreat", name: label, at: wd.fledTo });
+		if (wd.acquiredFood && snapshot?.position) worldJournal.append({ kind: "food", name: wd.source ?? "food", at: snapshot.position });
 		if (wd.plantedAt) worldJournal.append({ kind: "farm", name: "planted", at: wd.plantedAt });
 		if (wd.harvestedAt) worldJournal.append({ kind: "farm", name: "harvested", at: wd.harvestedAt });
 		if (wd.tilledAt) worldJournal.append({ kind: "farm", name: "tilled", at: wd.tilledAt });
@@ -218,6 +228,7 @@ function dispatchAction(fn, label, opts = {}) {
 	}
 	reflexCtx.busy = true;
 	reflexCtx.currentActionLabel = label;
+	const startedAt = Date.now();
 	// Capture the situation hash BEFORE the action runs so a failure is
 	// attributable to the state at dispatch time, not the state after the
 	// (partial) effect.
@@ -243,7 +254,7 @@ function dispatchAction(fn, label, opts = {}) {
 				detail: res?.detail,
 				ts: Date.now(),
 			};
-			skillMetrics.record(label, ok);
+			skillMetrics.record(label, ok, { code: lastResult.code, durationMs: Date.now() - startedAt });
 			scenarioMemory.record({
 				skillId: label,
 				situation: startSituation,
@@ -278,7 +289,7 @@ function dispatchAction(fn, label, opts = {}) {
 				detail: String(e?.message ?? e),
 				ts: Date.now(),
 			};
-			skillMetrics.record(label, false);
+			skillMetrics.record(label, false, { code: "threw", durationMs: Date.now() - startedAt });
 			scenarioMemory.record({
 				skillId: label,
 				situation: startSituation,

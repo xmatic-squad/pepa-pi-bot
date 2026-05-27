@@ -55,10 +55,21 @@ test("replan fires after stuck window elapses", async () => {
 	const wd = createPathfinderWatchdog(bot, { intervalMs: 50, windowMs: 100, delta: 0.5, maxReplans: 5 });
 	await new Promise((r) => setTimeout(r, 2200)); // pass min-travel + window
 	wd.stop();
-	// At least one setGoal(null) call.
+	// At least one same-object setGoal(goal) call.
 	assert.ok(bot.setGoalCalls.length >= 1, `expected ≥1 setGoal call, got ${bot.setGoalCalls.length}`);
-	// First call is setGoal(null).
-	assert.equal(bot.setGoalCalls[0], null);
+	assert.equal(bot.setGoalCalls[0], goal);
+});
+
+test("does not replan while collectBlock owns pathfinder", async () => {
+	const goal = { id: "g1" };
+	const bot = makeBot({ goalRef: goal, pos: { x: 0, y: 64, z: 0 } });
+	bot.pathfinder._owner = bot;
+	bot.collectBlock = { targets: { empty: false, targets: [{}] } };
+	const wd = createPathfinderWatchdog(bot, { intervalMs: 50, windowMs: 100, delta: 0.5, maxReplans: 5 });
+	await new Promise((r) => setTimeout(r, 2200)); // pass min-travel + window
+	wd.stop();
+	assert.equal(_internal.collectBlockOwnsPathfinder(bot), true);
+	assert.equal(bot.setGoalCalls.length, 0);
 });
 
 test("respects maxReplans cap", async () => {
@@ -68,8 +79,7 @@ test("respects maxReplans cap", async () => {
 	const wd = createPathfinderWatchdog(bot, { intervalMs: 50, windowMs: 80, delta: 0.5, maxReplans: 2 });
 	await new Promise((r) => setTimeout(r, 5000));
 	wd.stop();
-	// Each replan = setGoal(null) + delayed setGoal(goal). So 2 replans ≤ 4 calls.
-	assert.ok(bot.setGoalCalls.length <= 4, `expected ≤4 setGoal calls, got ${bot.setGoalCalls.length}`);
+	assert.ok(bot.setGoalCalls.length <= 2, `expected ≤2 setGoal calls, got ${bot.setGoalCalls.length}`);
 });
 
 test("resets counters when goal changes", async () => {

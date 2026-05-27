@@ -154,6 +154,7 @@ test("all done → null", () => {
 		nextMilestone(snap(inv, {
 			food: 20,
 			locations: {
+				chest: { x: 1, y: 64, z: 0 },
 				base: { x: 0, y: 64, z: 0 },
 				shelter: { x: 0, y: 64, z: 0 },
 			},
@@ -188,4 +189,20 @@ test("listMilestones exposes ordered ids for diary/TUI", () => {
 		assert.equal(typeof m.id, "string");
 		assert.equal(typeof m.title, "string");
 	}
+});
+
+test("food.basic with no carried food suggests acquire-food", () => {
+	const got = nextMilestone(snapAfter("stone.tools", {}, { food: 8 }));
+	assert.equal(got.milestone.id, "food.basic");
+	assert.equal(got.plan.skillId, "survive.acquire-food");
+});
+
+test("storage.chest crafts first, then places carried chest", () => {
+	const needCraft = nextMilestone(snapAfter("food.basic", { chest: 0 }));
+	assert.equal(needCraft.milestone.id, "storage.chest");
+	assert.equal(needCraft.plan.skillId, "craft.chest");
+
+	const needPlace = nextMilestone(snapAfter("food.basic", { chest: 1 }));
+	assert.equal(needPlace.milestone.id, "storage.chest");
+	assert.equal(needPlace.plan.skillId, "village.place-chest");
 });

@@ -311,6 +311,45 @@ function sleepReflex(ctx) {
 
 const CURRICULUM_COOLDOWN_MS = 4_000;
 const SKILL_BACKOFF_MS = 60_000;
+const METRIC_BACKOFF_MS = 10 * 60_000;
+const METRIC_BAD_CODES = new Set(["timeout", "failed", "wedged", "silent_dig_failure", "validation_failed"]);
+
+function isRecentBadMetric(metric, { minFails = 2, maxAgeMs = METRIC_BACKOFF_MS } = {}) {
+	if (!metric) return false;
+	if ((metric.fail ?? 0) < minFails) return false;
+	if (!METRIC_BAD_CODES.has(metric.lastCode)) return false;
+	if ((metric.ok ?? 0) > 0 && metric.lastCode !== "timeout") return false;
+	return Date.now() - (metric.lastTs ?? 0) < maxAgeMs;
+}
+
+function recentSuccessAfter(metric, ts) {
+	if (!metric || !ts) return false;
+	if ((metric.ok ?? 0) <= 0) return false;
+	return (metric.lastTs ?? 0) > ts && metric.lastCode === "done";
+}
+
+function metricRecoverySkill(ctx, plannedSkillId) {
+	let metrics = null;
+	try {
+		metrics = ctx.metrics?.snapshot?.() ?? null;
+	} catch {
+		return null;
+	}
+	if (!metrics) return null;
+	const badExplore = isRecentBadMetric(metrics["explore.far"], { minFails: 1 });
+	const badWander = isRecentBadMetric(metrics.wander, { minFails: 2 });
+	const lastMovementBadTs = Math.max(
+		badExplore ? (metrics["explore.far"]?.lastTs ?? 0) : 0,
+		badWander ? (metrics.wander?.lastTs ?? 0) : 0,
+	);
+	if ((badExplore || badWander) && !recentSuccessAfter(metrics["recovery.tunnel-out"], lastMovementBadTs)) {
+		return { skillId: "recovery.tunnel-out", reason: "recent movement recovery failures" };
+	}
+	if (plannedSkillId && isRecentBadMetric(metrics[plannedSkillId], { minFails: 2 })) {
+		return { skillId: "explore.far", reason: `${plannedSkillId} recently failed repeatedly` };
+	}
+	return null;
+}
 
 function curriculumReflex(ctx) {
 	const s = ctx.snapshot;
@@ -323,6 +362,39 @@ function curriculumReflex(ctx) {
 	const plan = s.curriculum?.plan;
 	const wanderHintUntil = ctx.skillBackoff?.["__wander_hint__"] ?? 0;
 	const wantWander = wanderHintUntil && Date.now() < wanderHintUntil;
+	const metricRecovery = metricRecoverySkill(ctx, plan?.skillId);
+	if (metricRecovery) {
+		ctx.lastCurriculumAt = Date.now();
+		ctx.skillBackoff = ctx.skillBackoff ?? {};
+		if (plan?.skillId) ctx.skillBackoff[plan.skillId] = Date.now() + SKILL_BACKOFF_MS;
+		const args = metricRecovery.skillId === "recovery.tunnel-out"
+			? { reason: metricRecovery.reason, maxSteps: 3 }
+			: {};
+		ctx.dispatch(() => runSkill(metricRecovery.skillId, ctx, args), metricRecovery.skillId, {});
+		return {
+			action: "dispatched",
+			kind: "curriculum-metric-recovery",
+			label: metricRecovery.skillId,
+		};
+	}
+	if (s.curriculum?.inventoryFull) {
+		const depositId = s.locations?.chest || s.nearbyBlocks?.storage ? "village.deposit-surplus" : null;
+		if (depositId) {
+			const depositBackoff = ctx.skillBackoff?.[depositId] ?? 0;
+			if (Date.now() >= depositBackoff) {
+				ctx.lastCurriculumAt = Date.now();
+				ctx.dispatch(() => runSkill(depositId, ctx), depositId, {
+					onComplete: (res) => {
+						if (!res?.ok) {
+							ctx.skillBackoff = ctx.skillBackoff ?? {};
+							ctx.skillBackoff[depositId] = Date.now() + SKILL_BACKOFF_MS;
+						}
+					},
+				});
+				return { action: "dispatched", kind: "curriculum-deposit", label: depositId };
+			}
+		}
+	}
 
 	// No skill plan from curriculum OR a recent skill asked us to wander.
 	// First hint → small wander (might just be 32-block reach issue).
@@ -382,7 +454,7 @@ function curriculumReflex(ctx) {
 			if (!res?.ok) {
 				// missing_tool / missing_material / no_target shouldn't be
 				// retried on the very next tick. Hold for SKILL_BACKOFF_MS.
-				const cooldownCodes = new Set(["missing_tool", "missing_material", "no_target", "no_food_source", "unsupported_version"]);
+				const cooldownCodes = new Set(["missing_tool", "missing_material", "no_target", "no_food_source", "unsupported_version", "no_chest", "no_space", "nothing_to_deposit"]);
 				if (cooldownCodes.has(res?.code)) {
 					ctx.skillBackoff[skillId] = Date.now() + SKILL_BACKOFF_MS;
 				}
@@ -432,11 +504,12 @@ export function runTick(ctx) {
 	if (modeHit?.action?.skillId) {
 		const fn = () => runSkill(modeHit.action.skillId, ctx, modeHit.action.args ?? {});
 		ctx.lastReflex = { name: `mode:${modeHit.mode}`, label: modeHit.action.skillId, ts: Date.now() };
+		ctx.dispatch(fn, modeHit.action.skillId, {});
 		return {
 			reflex: `mode:${modeHit.mode}`,
-			action: "dispatch",
+			action: "dispatched",
+			kind: `mode:${modeHit.mode}`,
 			label: modeHit.action.skillId,
-			fn,
 			detail: modeHit.detail,
 		};
 	}

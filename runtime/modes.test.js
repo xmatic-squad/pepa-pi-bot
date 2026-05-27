@@ -70,14 +70,14 @@ test("self_preservation: low-HP + food + hasFood → eat", async () => {
 	const mod = await import(`./modes.js?cb=${Date.now() + 1}`);
 	const out = mod.tickModes({ snapshot: { health: 4, food: 10, hasFood: true } });
 	assert.equal(out.mode, "self_preservation");
-	assert.equal(out.action.skillId, "eat");
+	assert.equal(out.action.skillId, "survive.eat");
 });
 
 test("hunger: food below 14 with food → eat", async () => {
 	_resetModes();
 	const mod = await import(`./modes.js?cb=${Date.now() + 2}`);
 	const out = mod.tickModes({ snapshot: { health: 20, food: 12, hasFood: true } });
-	assert.equal(out.action.skillId, "eat");
+	assert.equal(out.action.skillId, "survive.eat");
 });
 
 test("night_shelter: day → null (skip)", async () => {
@@ -91,5 +91,5 @@ test("night_shelter: night + bed in hand → sleep", async () => {
 	_resetModes();
 	const mod = await import(`./modes.js?cb=${Date.now() + 4}`);
 	const out = mod.tickModes({ snapshot: { isDay: false, food: 20, hasFood: false, inventory: { red_bed: 1 } } });
-	assert.equal(out.action.skillId, "sleep");
+	assert.equal(out.action.skillId, "survive.sleep");
 });

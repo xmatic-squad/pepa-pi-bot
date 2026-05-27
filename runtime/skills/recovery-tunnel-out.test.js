@@ -100,6 +100,38 @@ test("tunnel-out does not count jumping in place as escape", async () => {
 	assert.match(res.detail.error, /moved only 0\.00 horizontally/);
 });
 
+test("tunnel-out digs one reachable layer at a time", async () => {
+	const blocks = {};
+	for (let step = 1; step <= 3; step++) {
+		blocks[`${step},64,0`] = "stone";
+		blocks[`${step},65,0`] = "stone";
+		blocks[`${step},63,0`] = "stone";
+	}
+	blocks["0,64,-1"] = "oak_planks";
+	blocks["0,64,1"] = "oak_planks";
+	blocks["-1,64,0"] = "oak_planks";
+
+	const bot = makeBot(blocks);
+	bot.look = async () => {};
+	bot.lookAt = async () => {};
+	bot.dig = async (block) => {
+		const dist = Math.hypot(block.position.x - bot.entity.position.x, block.position.z - bot.entity.position.z);
+		if (dist > 1.5) throw new Error(`too far: ${dist.toFixed(1)}`);
+		blocks[`${block.position.x},${block.position.y},${block.position.z}`] = "air";
+	};
+	bot.setControlState = (control, on) => {
+		if (control === "forward" && !on) {
+			bot.entity.position = makePos(bot.entity.position.x + 1, bot.entity.position.y, bot.entity.position.z);
+		}
+	};
+
+	const res = await digEscapeTunnel(bot, { maxSteps: 3, minMove: 0.75, pushMs: 0 });
+	assert.equal(res.ok, true);
+	assert.equal(res.detail.dir, "E");
+	assert.equal(res.detail.dug, 6);
+	assert.equal(Math.round(bot.entity.position.x), 3);
+});
+
 test("explore.far blind fallback does not report done when position is unchanged", async () => {
 	const blocks = {};
 	const bot = makeBot(blocks);

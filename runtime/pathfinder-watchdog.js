@@ -35,6 +35,19 @@ function hdist(a, b) {
 	return Math.hypot(a.x - b.x, a.z - b.z);
 }
 
+function collectBlockOwnsPathfinder(bot) {
+	try {
+		const targets = bot.collectBlock?.targets;
+		if (!targets) return false;
+		if (typeof targets.empty === "boolean") return targets.empty === false;
+		if (Array.isArray(targets.targets)) return targets.targets.length > 0;
+		if (typeof targets.size === "number") return targets.size > 0;
+		return false;
+	} catch {
+		return false;
+	}
+}
+
 export function createPathfinderWatchdog(bot, {
 	intervalMs = WATCH_INTERVAL_MS,
 	windowMs = STUCK_WINDOW_MS,
@@ -71,6 +84,15 @@ export function createPathfinderWatchdog(bot, {
 			return;
 		}
 		if (Date.now() - goalStartedAt < MIN_TRAVEL_TIME_MS) return;
+		if (collectBlockOwnsPathfinder(bot)) {
+			// mineflayer-collectblock treats pathfinder goal changes as a
+			// hard cancellation ("The goal was changed before it could be
+			// completed"). Let the collect skill's own timeout/blacklist
+			// handle these paths instead of invalidating the current dig.
+			lastSeenPos = hpos(bot.entity?.position);
+			lastSeenAt = Date.now();
+			return;
+		}
 
 		const now = Date.now();
 		const here = hpos(bot.entity?.position);
@@ -81,8 +103,11 @@ export function createPathfinderWatchdog(bot, {
 		}
 		if (now - lastSeenAt < windowMs) return;
 
-		// Stuck. Force a replan — clear the goal, then re-set the same
-		// goal so pathfinder rebuilds the graph against the current world.
+		// Stuck. Force a replan by setting the exact same goal object again.
+		// mineflayer-pathfinder emits goal_updated on every setGoal() call
+		// and rebuilds the graph, but goto() only rejects as GoalChanged when
+		// the new goal object is different. Clearing to null first breaks the
+		// caller, as observed live with gather.logs/explore.far.
 		if (replansThisGoal >= maxReplans) {
 			warn("pathfinder", `stuck > ${windowMs / 1000}s and hit ${maxReplans} replans; giving up — caller's timeout will fire`);
 			lastSeenAt = now; // throttle further warnings within this window
@@ -92,15 +117,7 @@ export function createPathfinderWatchdog(bot, {
 		info("pathfinder", `stuck for ${Math.round((now - lastSeenAt) / 1000)}s at (${Math.round(here?.x ?? 0)},${Math.round(here?.z ?? 0)}) — forcing replan #${replansThisGoal}`);
 		try {
 			const goalCopy = goal;
-			// setGoal(null) cancels the current pathing without bubbling
-			// an error to the awaiting goto() promise.
-			pf.setGoal(null);
-			// Re-set immediately. mineflayer-pathfinder will compute a
-			// fresh path off the latest world snapshot.
-			setTimeout(() => {
-				if (stopped) return;
-				try { pf.setGoal(goalCopy); } catch (e) { warn("pathfinder", `replan setGoal failed: ${e.message}`); }
-			}, 250);
+			pf.setGoal(goalCopy);
 			lastSeenAt = now; // reset window
 		} catch (e) {
 			warn("pathfinder", `replan failed: ${e.message}`);
@@ -118,4 +135,4 @@ export function createPathfinderWatchdog(bot, {
 }
 
 // Pure helpers for tests.
-export const _internal = { hpos, hdist };
+export const _internal = { hpos, hdist, collectBlockOwnsPathfinder };

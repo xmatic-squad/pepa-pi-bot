@@ -45,13 +45,18 @@ export function situationHash(snapshot) {
 	const hostile = snapshot.closestHostile && snapshot.closestHostile.distance < 24
 		? snapshot.closestHostile.name
 		: "-";
+	const biome = snapshot.biome ?? "-";
+	const blocks = Object.keys(snapshot.nearbyBlocks ?? {})
+		.sort()
+		.slice(0, 8)
+		.join(",") || "-";
 	// Inventory keys, sorted — we lose counts but keep "what kind of stuff do
 	// I have". Limited to first 10 names for hash stability.
 	const invKeys = Object.keys(snapshot.inventory ?? {})
 		.sort()
 		.slice(0, 10)
 		.join(",") || "-";
-	return `${cx},${cy},${cz}|${day}|${food}|${hp}|host:${hostile}|inv:${invKeys}`;
+	return `${cx},${cy},${cz}|${day}|${food}|${hp}|bio:${biome}|blocks:${blocks}|host:${hostile}|inv:${invKeys}`;
 }
 
 function loadScenarios() {

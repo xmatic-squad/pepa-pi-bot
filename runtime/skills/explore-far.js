@@ -8,7 +8,7 @@
 // patch.
 
 import pathfinderPkg from "mineflayer-pathfinder";
-const { pathfinder, goals, Movements } = pathfinderPkg;
+const { pathfinder, Movements } = pathfinderPkg;
 
 import { info, warn } from "../log.js";
 import { digEscapeTunnel } from "./recovery-tunnel-out.js";
@@ -69,6 +69,7 @@ export const skill = Object.freeze({
 		// this server mean we can't trust GoalNear; cardinal probing
 		// gives us a free-direction signal cheaply.
 		const dist = Math.max(24, args.distance ?? 48);
+		const beforeProbe = clonePos(bot.entity.position);
 		const trials = await probeCardinalStep(bot, 800);
 		const movable = trials.filter((t) => t.dist > 0.5);
 
@@ -89,6 +90,16 @@ export const skill = Object.freeze({
 		}
 		info("action", `explore.far: cardinal probe trials=${trials.map((t) => `${t.name}:${t.dist.toFixed(1)}`).join(" ")} best=${best.name}`);
 
+		const probeMoved = horizontalDistance(beforeProbe, bot.entity.position);
+		if (probeMoved >= 2) {
+			return {
+				ok: true,
+				code: "done",
+				detail: { mode: "probe-moved", dir: best.name, moved: probeMoved },
+				worldDelta: { movedTo: clonePos(bot.entity.position) },
+			};
+		}
+
 		if (best.dist < 0.5) {
 			// All cardinals blocked. Try the cheap vertical escape first; if it
 			// does not actually move us, carve a short horizontal tunnel. The
@@ -107,33 +118,19 @@ export const skill = Object.freeze({
 		const tx = Math.round(here.x + Math.sin(-best.yaw) * dist);
 		const tz = Math.round(here.z + Math.cos(-best.yaw) * dist);
 		const ty = Math.round(here.y);
-		info("action", `explore.far: walking ${best.name} → ${tx},${ty},${tz}`);
-
-		try {
-			await withTimeout(
-				bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 4)),
-				45_000,
-				`explore.far(${tx},${tz})`,
-			);
-			return {
-				ok: true, code: "done",
-				detail: { to: { x: tx, y: ty, z: tz }, dir: best.name },
-				worldDelta: { movedTo: { x: tx, y: ty, z: tz } },
-			};
-		} catch (e) {
-			warn("action", `explore.far pathfinder failed: ${e.message} — continuing blind`);
-			return blindWalkOrTunnelOut(bot, {
-				yaw: best.yaw,
-				dirName: best.name,
-				blindMs: args.blindMs ?? 7_000,
-				tunnelPushMs: args.tunnelPushMs,
-				reason: `explore.far blind ${best.name}`,
-			});
-		}
+		info("action", `explore.far: blind-walking ${best.name} toward ${tx},${ty},${tz}`);
+		return blindWalkOrTunnelOut(bot, {
+			yaw: best.yaw,
+			dirName: best.name,
+			blindMs: args.blindMs ?? 7_000,
+			tunnelPushMs: args.tunnelPushMs,
+			reason: `explore.far blind ${best.name}`,
+			intended: { x: tx, y: ty, z: tz },
+		});
 	},
 });
 
-async function blindWalkOrTunnelOut(bot, { yaw, dirName, blindMs = 7_000, minMove = 0.75, tunnelPushMs, reason = "blind fallback" } = {}) {
+async function blindWalkOrTunnelOut(bot, { yaw, dirName, blindMs = 7_000, minMove = 0.75, tunnelPushMs, reason = "blind fallback", intended = null } = {}) {
 	const before = clonePos(bot.entity.position);
 	try { await bot.look(yaw, 0, true); } catch {}
 	bot.setControlState("forward", true);
@@ -150,7 +147,7 @@ async function blindWalkOrTunnelOut(bot, { yaw, dirName, blindMs = 7_000, minMov
 		return {
 			ok: true,
 			code: "done",
-			detail: { mode: "blind-moved", previousMode: "blind", dir: dirName, moved },
+			detail: { mode: "blind-moved", previousMode: "blind", dir: dirName, moved, intended },
 			worldDelta: { movedTo: clonePos(bot.entity.position) },
 		};
 	}
