@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 
 import { advise, isAvailable, _resetForTest, __testing } from "./fast-advisor.js";
 
-const API_KEY = "PEPA_FAST_LLM_API_KEY";
-const MODEL = "PEPA_FAST_LLM_MODEL";
-const BASE = "PEPA_FAST_LLM_BASE_URL";
+const API_KEY = "TIMEWEB_API_KEY";
+const MODEL = "TIMEWEB_MODEL";
+const BASE = "TIMEWEB_BASE_URL";
 
 function withEnv(env, fn) {
 	const prev = {};
@@ -43,6 +43,7 @@ test("advise: not_configured without API key", async () => {
 		const res = await advise({ reason: "stuck" });
 		assert.equal(res.ok, false);
 		assert.equal(res.code, "not_configured");
+		assert.match(res.detail, /TIMEWEB_API_KEY/);
 	});
 });
 

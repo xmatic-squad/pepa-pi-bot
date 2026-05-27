@@ -65,7 +65,7 @@ L10 village_full   глобальная цель (ферма + дом + сосе
 - `runtime/coach/advice.js`: `normalisePreferSkill` строго отбрасывает
   всё, что не в реестре (raise log, не дрейфит на fuzzy)
 - `runtime/llm/provider.js` — OpenAI-совместимый клиент, конфигурируется
-  через env (`PEPA_FAST_LLM_BASE_URL`, `_API_KEY`, `_MODEL`); graceful
+  через env (`TIMEWEB_BASE_URL`, `TIMEWEB_API_KEY`, `TIMEWEB_MODEL`); graceful
   fallback "no-op" если env не задан (бот не падает)
 - `runtime/coach/fast-advisor.js` — функция `advise({snapshot, reason})`
   с rate-limit (макс. 6 вызовов/час), таймаут 8с, JSON-парсинг ответа

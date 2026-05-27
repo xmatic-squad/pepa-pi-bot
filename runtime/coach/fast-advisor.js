@@ -50,7 +50,7 @@ export async function advise({
 	force = false,
 } = {}) {
 	if (!isAvailable()) {
-		return { ok: false, code: "not_configured", detail: "set PEPA_FAST_LLM_API_KEY", latencyMs: 0 };
+		return { ok: false, code: "not_configured", detail: "set TIMEWEB_API_KEY", latencyMs: 0 };
 	}
 
 	const now = Date.now();

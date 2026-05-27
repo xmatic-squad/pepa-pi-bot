@@ -22,10 +22,10 @@ fixed: (a) Pi now sees the real registry in its system prompt,
     namespace, with "USE ONLY THESE, never invent" instruction
 - [`runtime/llm/provider.js`](../../runtime/llm/provider.js) —
   OpenAI-compatible chat client, env-driven:
-  - `PEPA_FAST_LLM_BASE_URL` (default `https://api.openai.com/v1`)
-  - `PEPA_FAST_LLM_API_KEY` (required to enable; safe no-op otherwise)
-  - `PEPA_FAST_LLM_MODEL` (required)
-  - `PEPA_FAST_LLM_TIMEOUT_MS` (default 8000)
+  - `TIMEWEB_BASE_URL` (default `https://api.openai.com/v1`)
+  - `TIMEWEB_API_KEY` (required to enable; safe no-op otherwise)
+  - `TIMEWEB_MODEL` (required)
+  - `TIMEWEB_TIMEOUT_MS` (default 8000)
   - Supports JSON-mode via `response_format: { type: "json_object" }`
   - Surfaces `not_configured`, `no_model`, `http_<status>`,
     `network_error`, `timeout`, `bad_json` codes
@@ -167,9 +167,9 @@ Tests: 332 green (was 315 on rc.2, +17 new):
    start growing as the registry feedback closes the loop.
 3. **Set fast-advisor env when ready to test**:
    ```bash
-   export PEPA_FAST_LLM_BASE_URL="https://<timeweb-endpoint>/v1"
-   export PEPA_FAST_LLM_API_KEY="<key>"
-   export PEPA_FAST_LLM_MODEL="gpt-5-mini"
+   export TIMEWEB_BASE_URL="https://<timeweb-endpoint>/v1"
+   export TIMEWEB_API_KEY="<key>"
+   export TIMEWEB_MODEL="gpt-5-mini"
    ```
    The advisor still isn't auto-triggered in rc.1 — it's wired in rc.3.
 4. **Pick the next rc** from PLAN.md.

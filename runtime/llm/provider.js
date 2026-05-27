@@ -6,19 +6,21 @@
 // right now ("I'm wedged in a pit, what should I do?").
 //
 // This provider opens a parallel path: any OpenAI-compatible HTTP endpoint
-// (TimeWeb, OpenAI direct, Groq, OpenRouter, local Ollama with the OpenAI
-// shim, …) producing a structured JSON answer in ≤8 seconds.
+// (TimeWeb is the default — same env var convention as the user's other
+// projects — but OpenAI direct, Groq, OpenRouter, and local Ollama with
+// the OpenAI shim all work with the same plumbing) producing a structured
+// JSON answer in ≤8 seconds.
 //
 // Configuration is strictly env-driven. The provider is a NO-OP unless
-// PEPA_FAST_LLM_API_KEY is set, so it's safe to ship the code disabled.
+// TIMEWEB_API_KEY is set, so it's safe to ship the code disabled.
 
 import { info, warn } from "../log.js";
 
 const ENV = {
-	BASE_URL: "PEPA_FAST_LLM_BASE_URL",
-	API_KEY: "PEPA_FAST_LLM_API_KEY",
-	MODEL: "PEPA_FAST_LLM_MODEL",
-	TIMEOUT_MS: "PEPA_FAST_LLM_TIMEOUT_MS",
+	BASE_URL: "TIMEWEB_BASE_URL",
+	API_KEY: "TIMEWEB_API_KEY",
+	MODEL: "TIMEWEB_MODEL",
+	TIMEOUT_MS: "TIMEWEB_TIMEOUT_MS",
 };
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
@@ -58,7 +60,7 @@ export async function complete({
 	}
 	const useModel = model || cfg.model;
 	if (!useModel) {
-		return { ok: false, code: "no_model", detail: `set ${ENV.MODEL} or pass model arg`, latencyMs: 0 };
+		return { ok: false, code: "no_model", detail: `set ${ENV.MODEL} env or pass model arg`, latencyMs: 0 };
 	}
 
 	const body = {
