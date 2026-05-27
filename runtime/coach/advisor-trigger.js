@@ -85,10 +85,11 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 	const snapshot = ctx.snapshot ?? null;
 	const recentSkillIds = (ctx.recentSkillIds ?? []).slice(-8);
 	const activeNeed = ctx.activeNeed ?? null;
+	const storyStep = ctx.storyStep ?? null;
 
-	info("advisor-trigger", `firing because ${reason} (planned=${plannedSkillId ?? "?"}, need=${activeNeed?.need?.id ?? "?"})`);
+	info("advisor-trigger", `firing because ${reason} (planned=${plannedSkillId ?? "?"}, need=${activeNeed?.need?.id ?? "?"}, step=${storyStep?.step?.id ?? "?"})`);
 	// Fire-and-forget. The promise's resolution writes ctx.advisorRecommendation.
-	advise({ snapshot, reason, recentSkillIds, lessonsTail: ctx.recentLessons ?? [], activeNeed, force: true })
+	advise({ snapshot, reason, recentSkillIds, lessonsTail: ctx.recentLessons ?? [], activeNeed, storyStep, force: true })
 		.then((result) => {
 			_inFlight = false;
 			const needLabel = activeNeed

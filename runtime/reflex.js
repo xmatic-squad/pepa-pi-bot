@@ -29,6 +29,7 @@ import { consult as consultAdvice, reportOutcome as reportAdviceOutcome } from "
 import { tickAdvisor, consumeFreshRecommendation } from "./coach/advisor-trigger.js";
 import { markRecommendationApplied, markRecommendationOutcome } from "./knowledge/index.js";
 import { pickActiveNeed } from "./manifesto/state.js";
+import { pickCurrentStep } from "./goal/state.js";
 import { situationHash } from "./scenario-memory.js";
 import { tickModes } from "./modes.js";
 
@@ -457,6 +458,15 @@ function curriculumReflex(ctx) {
 		ctx.activeNeed = activeNeed;
 	}
 	const manifestoSkillId = activeNeed?.skillId ?? null;
+
+	// v0.3.1 — storyline: the canonical Minecraft survival quest. Gives
+	// the bot a concrete, narratable next-action ("collect 8 logs",
+	// "place crafting table"). Storyline yields to manifesto on L0
+	// alive emergencies but otherwise its suggestion is preferred over
+	// the curriculum plan when it picks a registered skill.
+	const storyStep = ctx.disableStoryline ? null : pickCurrentStep(s);
+	if (storyStep) ctx.storyStep = storyStep;
+	const storySkillId = (storyStep && !storyStep.emergency && storyStep.suggestion?.skillId) ? storyStep.suggestion.skillId : null;
 	const metricRecovery = metricRecoverySkill(ctx, plan?.skillId);
 	if (metricRecovery) {
 		ctx.lastCurriculumAt = Date.now();
@@ -495,7 +505,7 @@ function curriculumReflex(ctx) {
 	// First hint → small wander (might just be 32-block reach issue).
 	// Every subsequent hint while still inside the backoff window → use
 	// explore.far so the bot actually leaves the patch it's stuck in.
-	if ((!plan?.skillId && !manifestoSkillId) || wantWander) {
+	if ((!plan?.skillId && !manifestoSkillId && !storySkillId) || wantWander) {
 		ctx.lastCurriculumAt = Date.now();
 		const fallbackId = wantWander && consecutiveWanderHints >= 1 ? "explore.far" : "wander";
 		// v0.2.0-rc.3 — consult advice on the FALLBACK dispatch too. Without
@@ -530,10 +540,16 @@ function curriculumReflex(ctx) {
 		return { action: "dispatched", kind: "curriculum-wander", label: "wander" };
 	}
 
-	// Pick what to dispatch: manifesto wins over curriculum plan because
-	// it expresses concrete needs rather than abstract "next milestone".
-	let skillId = manifestoSkillId ?? plan.skillId;
-	let skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
+	// Pick what to dispatch. Order: manifesto > storyline > curriculum.
+	// Manifesto is highest because L0 alive emergencies (lava, low-HP +
+	// hostile) must override any narrative aspiration. Storyline beats
+	// curriculum because it expresses a concrete operational subgoal,
+	// not just "next milestone".
+	let skillId = manifestoSkillId ?? storySkillId ?? plan.skillId;
+	let skillSource = manifestoSkillId
+		? `manifesto:${activeNeed.need.id}`
+		: storySkillId ? `storyline:${storyStep.step.id}`
+		: "curriculum";
 
 	// v0.3.0 fast-advisor: if a fresh recommendation is sitting on ctx
 	// (the result of a previous tick's async advise() call), use it.

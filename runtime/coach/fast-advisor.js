@@ -67,6 +67,7 @@ export async function advise({
 	recentSkillIds = [],
 	lessonsTail = [],
 	activeNeed = null,
+	storyStep = null,
 	force = false,
 } = {}) {
 	if (!isAvailable()) {
@@ -83,7 +84,7 @@ export async function advise({
 	}
 
 	const system = buildSystemPrompt();
-	const user = buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, activeNeed });
+	const user = buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, activeNeed, storyStep });
 
 	_callTimes.push(now);
 	_lastCallAt = now;
@@ -164,7 +165,7 @@ function buildSystemPrompt() {
 	].join("\n");
 }
 
-function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, activeNeed }) {
+function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, activeNeed, storyStep }) {
 	const pos = snapshot?.position;
 	const inv = snapshot?.inventory ? Object.keys(snapshot.inventory).slice(0, 10).join(", ") : "(empty)";
 	const recent = (recentSkillIds ?? []).slice(-8).join(" → ") || "(none)";
@@ -172,6 +173,9 @@ function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, active
 	const needLine = activeNeed
 		? `L${activeNeed.need.level} ${activeNeed.need.id} (${activeNeed.need.title}) — manifesto wants ${activeNeed.skillId}`
 		: "(no active need)";
+	const storyLine = storyStep
+		? `step ${storyStep.index + 1} '${storyStep.step.id}' — ${storyStep.step.title}${storyStep.suggestion?.skillId ? ` (storyline wants ${storyStep.suggestion.skillId})` : ""}${storyStep.emergency ? " [EMERGENCY PAUSE]" : ""}`
+		: "(no current step)";
 	const hostile = snapshot?.closestHostile
 		? `${snapshot.closestHostile.name}@${snapshot.closestHostile.distance}b`
 		: "(none)";
@@ -180,6 +184,7 @@ function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, active
 		`Trigger: ${reason}`,
 		`Position: ${pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : "?"}`,
 		`HP: ${snapshot?.health ?? "?"} food: ${snapshot?.food ?? "?"} day: ${snapshot?.isDay ? "yes" : "no"}`,
+		`Storyline progress: ${storyLine}`,
 		`Active need (Maslow ladder): ${needLine}`,
 		`Closest hostile: ${hostile}`,
 		`Active skill: ${snapshot?.activeSkill ?? "(idle)"}`,
@@ -190,7 +195,7 @@ function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, active
 		"",
 		lessons ? `Relevant lessons:\n${lessons}\n` : "",
 		"What should the bot do RIGHT NOW? Return the JSON decision.",
-		"Prefer a skill that helps satisfy the active need unless an emergency forces another action.",
+		"Prefer a skill that advances the current storyline step. If a manifesto emergency fires, that wins over both. Don't repeat a skill that has been failing in the recent dispatches list.",
 	].filter(Boolean).join("\n");
 }
 

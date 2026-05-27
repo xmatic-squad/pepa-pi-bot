@@ -51,6 +51,7 @@ function makeCtx({
 	                          // runtime/manifesto/state.test.js separately.
 	disableAdvisor = true,   // advisor-trigger fires real async LLM calls,
 	                          // tested directly in advisor-trigger.test.js.
+	disableStoryline = true, // storyline tested in goal/storyline.test.js
 } = {}) {
 	const dispatches = [];
 	const ctx = {
@@ -65,6 +66,7 @@ function makeCtx({
 		metrics,
 		disableManifesto,
 		disableAdvisor,
+		disableStoryline,
 		dispatch(fn, label, opts = {}) {
 			dispatches.push({ fn, label, opts });
 		},

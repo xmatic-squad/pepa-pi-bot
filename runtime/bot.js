@@ -63,6 +63,7 @@ import { attach as attachReflect } from "./coach/reflect.js";
 import { attach as attachTuner } from "./coach/trigger-tuner.js";
 import { attach as attachChatter } from "./persona/chatter.js";
 import { attachAwareness } from "./awareness/events.js";
+import { pickCurrentStep } from "./goal/state.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -844,6 +845,10 @@ function tick() {
 		}
 		const curriculumEarly = nextCurriculumMilestone(lastSnapshot);
 		lastSnapshot.curriculum = curriculumEarly;
+		// Storyline current step — surfaced in snapshot so chatter and
+		// other observers can react to step transitions without
+		// re-importing the picker.
+		try { lastSnapshot.storyStep = pickCurrentStep(lastSnapshot); } catch {}
 		reflexCtx.snapshot = lastSnapshot;
 		if (!reflexPaused) {
 			const result = runTick(reflexCtx);
