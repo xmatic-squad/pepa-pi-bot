@@ -49,6 +49,8 @@ function makeCtx({
 	disableManifesto = true, // curriculum branch tests don't construct
 	                          // full snapshots; manifesto is exercised by
 	                          // runtime/manifesto/state.test.js separately.
+	disableAdvisor = true,   // advisor-trigger fires real async LLM calls,
+	                          // tested directly in advisor-trigger.test.js.
 } = {}) {
 	const dispatches = [];
 	const ctx = {
@@ -62,6 +64,7 @@ function makeCtx({
 		skillBackoff,
 		metrics,
 		disableManifesto,
+		disableAdvisor,
 		dispatch(fn, label, opts = {}) {
 			dispatches.push({ fn, label, opts });
 		},

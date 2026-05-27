@@ -26,6 +26,7 @@ import {
 } from "./actions.js";
 import { runSkill, getSkill } from "./skills/index.js";
 import { consult as consultAdvice, reportOutcome as reportAdviceOutcome } from "./coach/advice.js";
+import { tickAdvisor, consumeFreshRecommendation } from "./coach/advisor-trigger.js";
 import { pickActiveNeed } from "./manifesto/state.js";
 import { situationHash } from "./scenario-memory.js";
 import { tickModes } from "./modes.js";
@@ -530,8 +531,25 @@ function curriculumReflex(ctx) {
 
 	// Pick what to dispatch: manifesto wins over curriculum plan because
 	// it expresses concrete needs rather than abstract "next milestone".
-	const skillId = manifestoSkillId ?? plan.skillId;
-	const skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
+	let skillId = manifestoSkillId ?? plan.skillId;
+	let skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
+
+	// v0.3.0 fast-advisor: if a fresh recommendation is sitting on ctx
+	// (the result of a previous tick's async advise() call), use it.
+	// This is the closing of the awareness → LLM → action loop.
+	if (!ctx.disableAdvisor) {
+		const rec = consumeFreshRecommendation(ctx);
+		if (rec && rec.skillId) {
+			info(REFLEX_LOG, `advisor override: ${skillId} → ${rec.skillId} (${rec.triggerReason}, ${rec.rationale?.slice(0, 60)})`);
+			skillId = rec.skillId;
+			skillSource = `advisor:${rec.triggerReason}`;
+		}
+		// Always fire-and-forget another advise() if triggers fire — the
+		// result lands on a future tick. tickAdvisor handles its own
+		// cooldown / in-flight checks so this is safe to call every tick.
+		tickAdvisor(ctx, { plannedSkillId: skillId });
+	}
+
 	const skill = getSkill(skillId);
 	if (!skill) {
 		// Suggested a skill that isn't registered yet — fall back

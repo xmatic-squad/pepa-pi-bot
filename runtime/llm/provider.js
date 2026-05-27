@@ -141,8 +141,19 @@ export async function complete({
 		}
 	}
 
-	info("llm", `${useModel} ok (${latencyMs}ms, ${text.length}ch)`);
-	return { ok: true, text: parsed, raw: text, latencyMs };
+	// usage shape per OpenAI / TimeWeb / most compat endpoints:
+	// { prompt_tokens, completion_tokens, total_tokens }
+	const usage = normaliseUsage(payload?.usage);
+	info("llm", `${useModel} ok (${latencyMs}ms, ${text.length}ch, in=${usage.in}/out=${usage.out}t)`);
+	return { ok: true, text: parsed, raw: text, latencyMs, usage };
+}
+
+function normaliseUsage(u) {
+	if (!u || typeof u !== "object") return { in: 0, out: 0, total: 0 };
+	const inT = Number(u.prompt_tokens ?? u.input_tokens ?? 0) || 0;
+	const outT = Number(u.completion_tokens ?? u.output_tokens ?? 0) || 0;
+	const total = Number(u.total_tokens ?? inT + outT) || (inT + outT);
+	return { in: inT, out: outT, total };
 }
 
 function tryParseJson(text) {
@@ -155,4 +166,4 @@ function tryParseJson(text) {
 }
 
 // Test exports
-export const __testing = { ENV, DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, tryParseJson };
+export const __testing = { ENV, DEFAULT_BASE_URL, DEFAULT_TIMEOUT_MS, tryParseJson, normaliseUsage };

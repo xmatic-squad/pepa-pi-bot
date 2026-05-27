@@ -239,6 +239,11 @@ function dispatchAction(fn, label, opts = {}) {
 	}
 	reflexCtx.busy = true;
 	reflexCtx.currentActionLabel = label;
+	// Rolling window of last 8 dispatched skill ids — read by
+	// runtime/coach/advisor-trigger.js to detect loops (4+ same in a row)
+	reflexCtx.recentSkillIds = reflexCtx.recentSkillIds ?? [];
+	reflexCtx.recentSkillIds.push(label);
+	if (reflexCtx.recentSkillIds.length > 8) reflexCtx.recentSkillIds.shift();
 	// v0.3.0-rc.3 — pre-emption: each dispatch gets a fresh AbortController.
 	// awareness/events.js#onPreempt fires controller.abort() when the env
 	// shocks (forced move, HP plunge, hostile spawn) the current skill

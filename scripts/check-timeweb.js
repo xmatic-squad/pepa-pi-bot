@@ -11,7 +11,8 @@ import { config as loadDotenv } from "dotenv";
 loadDotenv();
 
 import { complete, isAvailable, getConfig } from "../runtime/llm/provider.js";
-import { advise, _resetForTest as resetAdvisor } from "../runtime/coach/fast-advisor.js";
+import { advise, getUsageSnapshot, _resetForTest as resetAdvisor } from "../runtime/coach/fast-advisor.js";
+import { tickAdvisor, consumeFreshRecommendation, _resetForTest as resetTrigger } from "../runtime/coach/advisor-trigger.js";
 
 function redact(key) {
 	if (!key) return "(unset)";
@@ -74,10 +75,56 @@ async function main() {
 		console.log(`  action:   ${r3.action}`);
 		console.log(`  skillId:  ${r3.skillId ?? "(n/a)"}`);
 		console.log(`  why:      ${r3.rationale}`);
+		if (r3.usage) {
+			console.log(`  tokens:   in=${r3.usage.in} out=${r3.usage.out} total=${r3.usage.total}`);
+		}
 	} else {
 		console.log(`  code:     ${r3.code}`);
 		console.log(`  detail:   ${String(r3.detail).slice(0, 200)}`);
 	}
+
+	console.log("");
+	console.log("→ probe 4: auto-trigger flow (tickAdvisor → wait → consumeFreshRecommendation)");
+	resetAdvisor();
+	resetTrigger();
+	const ctx = {
+		snapshot: { position: { x: 608, y: 90, z: 91 }, health: 14, food: 18, isDay: true,
+			inventory: { dirt: 4 }, activeSkill: "explore.far" },
+		recentSkillIds: ["explore.far", "explore.far", "explore.far", "explore.far"],
+		lastSignificantMoveAt: Date.now() - 90_000,
+	};
+	const t = tickAdvisor(ctx, { plannedSkillId: "explore.far" });
+	console.log(`  trigger fired: ${t.fired} (${t.reason})`);
+	// wait up to 25s for async advise to land
+	const waitStart = Date.now();
+	while (!ctx.advisorRecommendation && Date.now() - waitStart < 25_000) {
+		await new Promise((r) => setTimeout(r, 200));
+	}
+	const consumed = consumeFreshRecommendation(ctx);
+	if (consumed) {
+		console.log(`  recommendation: ${consumed.skillId}`);
+		console.log(`  rationale:      ${consumed.rationale}`);
+		console.log(`  latency:        ${consumed.latencyMs}ms`);
+		if (consumed.usage) {
+			console.log(`  tokens:         in=${consumed.usage.in} out=${consumed.usage.out} total=${consumed.usage.total}`);
+		}
+	} else {
+		console.log(`  no recommendation (timeout or non-switch action)`);
+	}
+
+	console.log("");
+	console.log("=== Usage budget summary ===");
+	const usage = getUsageSnapshot();
+	console.log(`  calls (last hour): ${usage.callsLastHour}/${usage.hourlyBudget}`);
+	console.log(`  calls total:       ${usage.callsTotal}`);
+	console.log(`  tokens in (total): ${usage.tokensInTotal}`);
+	console.log(`  tokens out (total): ${usage.tokensOutTotal}`);
+	// Rough cost estimate for context — TimeWeb pricing unknown, OpenAI
+	// gpt-5-mini hypothetical: $0.15/M input + $0.60/M output.
+	const estUsd = (usage.tokensInTotal * 0.15 + usage.tokensOutTotal * 0.60) / 1_000_000;
+	console.log(`  est. cost (OpenAI gpt-5-mini pricing): $${estUsd.toFixed(6)}`);
+	console.log(`  per-call avg in:  ${Math.round(usage.tokensInTotal / Math.max(1, usage.callsTotal))}t`);
+	console.log(`  hourly @ budget:  ${Math.round(usage.tokensInTotal / Math.max(1, usage.callsTotal)) * usage.hourlyBudget}t in / ${Math.round(usage.tokensOutTotal / Math.max(1, usage.callsTotal)) * usage.hourlyBudget}t out`);
 }
 
 function logResult(r) {

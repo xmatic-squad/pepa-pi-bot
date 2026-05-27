@@ -23,14 +23,33 @@ const COOLDOWN_MS = 30_000;
 
 let _callTimes = [];
 let _lastCallAt = 0;
+let _tokensIn = 0;
+let _tokensOut = 0;
+let _calls = 0;
 
 export function isAvailable() {
 	return llmAvailable();
 }
 
+export function getUsageSnapshot() {
+	const now = Date.now();
+	const hourAgo = now - 3600_000;
+	const recentCalls = _callTimes.filter((t) => t > hourAgo).length;
+	return {
+		callsLastHour: recentCalls,
+		callsTotal: _calls,
+		tokensInTotal: _tokensIn,
+		tokensOutTotal: _tokensOut,
+		hourlyBudget: HOURLY_BUDGET,
+	};
+}
+
 export function _resetForTest() {
 	_callTimes = [];
 	_lastCallAt = 0;
+	_tokensIn = 0;
+	_tokensOut = 0;
+	_calls = 0;
 }
 
 /**
@@ -69,6 +88,11 @@ export async function advise({
 	_lastCallAt = now;
 
 	const res = await complete({ system, user, json: true });
+	_calls += 1;
+	if (res.usage) {
+		_tokensIn += res.usage.in;
+		_tokensOut += res.usage.out;
+	}
 	if (!res.ok) {
 		warn("advisor", `complete failed: ${res.code} (${res.detail})`);
 		return { ok: false, code: res.code, detail: res.detail, latencyMs: res.latencyMs };
@@ -93,6 +117,7 @@ export async function advise({
 				rationale,
 				raw: parsed,
 				latencyMs: res.latencyMs,
+				usage: res.usage,
 			};
 		}
 		info("advisor", `switch_skill → ${skillId} (${rationale.slice(0, 80)})`);
@@ -103,15 +128,16 @@ export async function advise({
 			rationale,
 			raw: parsed,
 			latencyMs: res.latencyMs,
+			usage: res.usage,
 		};
 	}
 
 	if (action === "continue" || action === "wait") {
 		info("advisor", `${action} (${rationale.slice(0, 80)})`);
-		return { ok: true, action, rationale, raw: parsed, latencyMs: res.latencyMs };
+		return { ok: true, action, rationale, raw: parsed, latencyMs: res.latencyMs, usage: res.usage };
 	}
 
-	return { ok: false, code: "bad_action", detail: action || "missing", raw: parsed, latencyMs: res.latencyMs };
+	return { ok: false, code: "bad_action", detail: action || "missing", raw: parsed, latencyMs: res.latencyMs, usage: res.usage };
 }
 
 function buildSystemPrompt() {
