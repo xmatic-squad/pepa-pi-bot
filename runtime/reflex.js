@@ -168,9 +168,13 @@ function dispatchDefendFlee(ctx, hostile, dist, opts = {}) {
 	ctx.lastFleeAttempt = { name: hostile.name, ts: Date.now() };
 
 	const fromEntity = matchingHostileEntity(ctx, hostile.name, dist);
+	const onComplete = opts.lessonId
+		? (res) => reportAdviceOutcome({ lessonId: opts.lessonId, succeeded: !!res?.ok })
+		: undefined;
 	ctx.dispatch(
 		() => fleeFrom(ctx.bot, fromEntity, 16),
 		`flee from ${hostile.name}`,
+		onComplete ? { onComplete } : {},
 	);
 	return { action: "dispatched", kind: "defend-flee", label: hostile.name };
 }
@@ -203,12 +207,17 @@ function defendReflex(ctx) {
 		}
 		// v0.2.0 — consult learned lessons. If knowledge says "do not
 		// attack <hostile> in this state" (e.g. creeper rule, or no-weapon
-		// rule learned from post-mortems), flee instead. This is the
-		// closing of the learning loop for emergency combat.
+		// rule learned from post-mortems), flee instead. The lesson outcome
+		// is reported AFTER the flee skill finishes (via dispatchDefendFlee
+		// onComplete), not before — flee's success/failure is what proves
+		// or disproves the lesson, not the act of consulting it. This is
+		// the closing of the learning loop for emergency combat.
 		const advice = consultAdvice({ plannedSkillId: `attack ${hostile.name}`, snapshot: s });
 		if (advice.action === "avoid" || advice.action === "override") {
-			if (advice.lessonId) reportAdviceOutcome({ lessonId: advice.lessonId, succeeded: false });
-			return dispatchDefendFlee(ctx, hostile, dist, { ignoreCooldown: true });
+			return dispatchDefendFlee(ctx, hostile, dist, {
+				ignoreCooldown: true,
+				lessonId: advice.lessonId,
+			});
 		}
 		ctx.dispatch(
 			() => attackNearestUntilClear(ctx.bot, hostile.name, {

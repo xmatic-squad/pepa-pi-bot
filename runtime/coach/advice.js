@@ -26,6 +26,36 @@ const SAFE_OVERRIDES = new Set([
 	"village.build-shelter",
 ]);
 
+// Pi-coach occasionally suggests prefer_skill values that are mode names
+// (from runtime/modes.js) rather than registered skill ids. We translate
+// them to the closest equivalent skill before the SAFE_OVERRIDES check.
+// Unknown values are returned as-is and will fall through to 'avoid'.
+const MODE_TO_SKILL = Object.freeze({
+	self_preservation: "survive.flee",
+	night_shelter: "survive.sleep",
+	hunger: "survive.eat",
+	shelter: "village.build-shelter",
+	flee: "survive.flee",
+	sleep: "survive.sleep",
+	eat: "survive.eat",
+	tunnel_out: "recovery.tunnel-out",
+	"tunnel-out": "recovery.tunnel-out",
+	explore: "explore.far",
+	wander: "explore.far",
+});
+
+function normalisePreferSkill(raw) {
+	if (!raw || typeof raw !== "string") return raw;
+	if (SAFE_OVERRIDES.has(raw)) return raw;
+	const lower = raw.toLowerCase().trim();
+	if (MODE_TO_SKILL[lower]) return MODE_TO_SKILL[lower];
+	// Pi sometimes writes "survive_flee" or "survive flee"; normalise.
+	const dot = lower.replace(/[_\s]+/g, ".");
+	if (SAFE_OVERRIDES.has(dot)) return dot;
+	if (MODE_TO_SKILL[dot]) return MODE_TO_SKILL[dot];
+	return raw;
+}
+
 /**
  * consult({ plannedSkillId, snapshot })
  *   → { action: 'override'|'avoid'|'proceed', overrideSkillId?, lessonId?, lesson? }
@@ -48,11 +78,15 @@ export function consult({ plannedSkillId, snapshot } = {}) {
 
 	// avoid_skill matches?
 	if (advice.avoid && advice.avoid === plannedSkillId) {
-		if (advice.prefer && SAFE_OVERRIDES.has(advice.prefer)) {
-			info("coach", `advice: override ${plannedSkillId} → ${advice.prefer} (lesson #${advice.lessonId})`);
+		const normalisedPrefer = normalisePreferSkill(advice.prefer);
+		if (normalisedPrefer && SAFE_OVERRIDES.has(normalisedPrefer)) {
+			if (normalisedPrefer !== advice.prefer) {
+				info("coach", `advice: normalised prefer "${advice.prefer}" → "${normalisedPrefer}"`);
+			}
+			info("coach", `advice: override ${plannedSkillId} → ${normalisedPrefer} (lesson #${advice.lessonId})`);
 			return {
 				action: "override",
-				overrideSkillId: advice.prefer,
+				overrideSkillId: normalisedPrefer,
 				lessonId: advice.lessonId,
 				lesson: advice.lesson,
 			};
@@ -76,4 +110,4 @@ export function reportOutcome({ lessonId, succeeded }) {
 const PROCEED = Object.freeze({ action: "proceed", lessonId: null, lesson: null });
 
 // Test exports
-export const __testing = { SAFE_OVERRIDES };
+export const __testing = { SAFE_OVERRIDES, MODE_TO_SKILL, normalisePreferSkill };

@@ -59,6 +59,7 @@ import { createScenarioMemory, situationHash } from "./scenario-memory.js";
 import { createOwnedBlocksLedger } from "./owned-blocks.js";
 import { initKnowledge } from "./knowledge/index.js";
 import { attach as attachCoach } from "./coach/postmortem.js";
+import { attach as attachReflect } from "./coach/reflect.js";
 import { attach as attachChatter } from "./persona/chatter.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
@@ -670,6 +671,7 @@ function connect() {
 		// import-safe; they just attach listeners and (for coach) a periodic
 		// Pi-drain timer. See docs/v0.2.0-self-learning.md.
 		try { attachCoach(bot, { stateDir, askPi }); } catch (e) { warn("coach", `attach: ${e?.message ?? e}`); }
+		try { attachReflect({ bot, stateDir, askPi, getSnapshot: () => lastSnapshot }); } catch (e) { warn("reflect", `attach: ${e?.message ?? e}`); }
 		try { attachChatter(bot, { getSnapshot: () => lastSnapshot }); } catch (e) { warn("persona", `attach: ${e?.message ?? e}`); }
 	});
 
