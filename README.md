@@ -1,10 +1,12 @@
 # pepa-pi-bot
 
-> A universal, autonomous, **self-extending** Minecraft player. Built on [Mineflayer](https://github.com/PrismarineJS/mineflayer) with a hybrid runtime: a fast script-driven reflex loop for the everyday, headless [Pi](https://pi.dev) escalation for the hard bits, and a **git-as-evolution-substrate** loop where the bot writes its own new skills and cherry-picks them onto `main` after passing a real `npm test` smoke gate. Works against **any** Minecraft Java server — vanilla, Paper, Spigot, Fabric, Forge, online-mode or cracked, modded or vanilla.
+> A universal, autonomous, **self-learning** Minecraft player. Built on [Mineflayer](https://github.com/PrismarineJS/mineflayer) with a hybrid runtime: a fast script-driven reflex loop for the everyday, headless [Pi](https://pi.dev) escalation for the hard bits, a **SQLite-backed knowledge base** the bot reads and writes as it plays, and a **git-as-evolution-substrate** self-improvement loop where Pi writes new skills, runs `npm test`, and opens a PR for operator review. Works against **any** Minecraft Java server — vanilla, Paper, Spigot, Fabric, Forge, online-mode or cracked, modded or vanilla.
 
-The bot is **not a finished application**. It is a seed: a Mineflayer body, a tiny reflex brain, persistent memory (`world-journal`, `scenario-memory`), a Voyager-style critic + Mindcraft-style modes/skill-library, and a self-improvement loop. The bot is expected to grow its own toolset over time — writing new reflexes, installing skills, adapting its behaviour as it plays.
+The bot is **not a finished application**. It is a seed. v0.2.0 added the learning substrate: every death is recorded with full context and asynchronously analysed by Pi into generalised lessons; the dispatcher consults those lessons before each action and routes around mistakes; the bot narrates its life in Russian MC chat to feel like a player, not a script. Earlier substrate (v0.1.x): Mineflayer body, reflex chain, persistent `world-journal` / `scenario-memory`, Voyager-style critic + Mindcraft-style modes/skill-library, scoped auto-patch loop.
 
-**Related work**: conceptually close to [Voyager](https://github.com/MineDojo/Voyager) (NVIDIA, GPT-4) and [Mindcraft](https://github.com/mindcraft-bots/mindcraft) (multi-agent LLM framework). The differentiator is that pepa stores its growing skill library as **versioned source code on `main`**, not as JSON in RAM — every Pi-written skill goes through `git checkout -b → npm test → cherry-pick`, making the loop auditable and rollback-safe.
+**Related work**: conceptually close to [Voyager](https://github.com/MineDojo/Voyager) (NVIDIA, GPT-4) and [Mindcraft](https://github.com/mindcraft-bots/mindcraft) (multi-agent LLM framework). The differentiators:
+- The growing skill library lives as **versioned source code on `main`** (not as JSON in RAM). Every Pi-written skill goes through `git checkout -b → npm test → PR for operator review`, making the loop auditable and rollback-safe.
+- Learned lessons live in **a per-server SQLite knowledge base** (`state/<host>/knowledge.db`), with recipes, mob intel, block intel, lessons, deaths, post-mortems, points-of-interest, cached wiki pages, and a chat log. The dispatcher reads from it before acting.
 
 The name `pepa-pi-bot` is just the project's name (`pepa` from the original test server, `pi` from the original runtime). The bot itself is server-agnostic.
 
@@ -36,12 +38,16 @@ Most Minecraft AI bots ship as monolithic projects: hard-coded actions, fixed pr
 │  ├── Modes chain (self_preservation > hunger > shelter)  │
 │  │   priority interrupts before curriculum dispatch      │
 │  ├── Reflex loop (defend > eat > sleep > curriculum)     │
-│  │   pure script — no LLM in the hot path                │
+│  │   consults coach/advice before every dispatch         │
 │  ├── perception.js — numeric-id findBlocks (VB-safe)     │
+│  ├── knowledge/ — SQLite store (recipes, mob/block intel,│
+│  │   lessons, deaths, post-mortems, POI, chat log)       │
+│  ├── coach/postmortem — death → DB → Pi → lessons        │
+│  ├── coach/advice — recall lessons → override / avoid    │
+│  ├── persona/chatter — Russian narration in MC chat      │
 │  ├── world-journal + scenario-memory (persistent JSONL)  │
 │  ├── stuck-incident → critic (Pi) → proposal             │
-│  ├── auto-improve → auto-patch → npm test → cherry-pick  │
-│  ├── social/conversation — file-JSONL multi-agent topics │
+│  ├── auto-improve → auto-patch → npm test → PR (review)  │
 │  └── pi-bridge — spawn `pi -p` only on demand            │
 └──────────────────────┬───────────────────────────────────┘
                        │ TCP 25565 (any host/port)
@@ -113,15 +119,19 @@ The TUI auto-reconnects to the bot if you restart it. Press `q` to leave the TUI
 
 ### Self-improvement loop (short version)
 
-The bot **proposes its own patches** when something repeatedly fails:
+The bot **proposes its own patches** when something repeatedly fails. As of v0.2.0 the loop ends in a **PR for operator review**, not a direct merge to `main`:
 
-1. Reflex action fails 3× with the same label → markdown proposal lands under `state/<host>/proposals/`.
-2. Status bar shows `[proposals N, press y]`.
-3. Press `y` to read, `y` to approve. The proposal moves to `proposals/approved/`.
-4. Run `npm run propose:apply <filename>` — spawns Pi headless on a fresh feature branch with the proposal + repo conventions. Pi writes a patch and commits.
-5. Review the diff, smoke-test locally (`npm run bot`), push + open a PR by hand.
+1. Reflex action fails 5× with the same label, or `noProgressReason` stays stuck → markdown proposal lands under `state/<host>/proposals/`.
+2. `runtime/auto-improve.js` watcher (2 s poll, 10 s debounce) picks it up and spawns `scripts/auto-patch.js` detached.
+3. `auto-patch.js`: refuses on dirty tree, moves proposal `pending → approved/`, creates branch `auto/<slug>` off main, runs `pi -p "<patch prompt>"` with 10-min timeout.
+4. If Pi committed and only touched the proposal's `editScope`, AND `npm run lint-patch` + `npm test` both pass → `git push origin auto/<slug>` + `gh pr create` against `main`.
+5. **Operator reviews the PR on GitHub and merges.** Branch protection on `main` requires approval — auto-patch cannot merge itself.
+6. Supervisor watches `runtime/**/*.js` and hot-restarts the child on file change once the merged commit is pulled.
 
-Supervisor (`npm run bot`) watches `runtime/*.js` and hot-restarts the child on file change, so during step 4 you can iterate quickly.
+Manual paths still work:
+- TUI hotkey `y` opens the latest pending proposal for inspection.
+- `npm run propose:apply <filename>` — *attended* version: same flow but leaves the branch local without opening a PR.
+- `PEPA_AUTO_PATCH_MERGE=cherry-pick` env reverts to the legacy direct-to-main behaviour (not recommended; bypasses review).
 
 See [`docs/runtime.md`](./docs/runtime.md) for the full lifecycle. **Note (2026-05-25):** MC chat is now dialog-only — operator commands (`come`, `pause`, `stop`, …) are no longer dispatched from chat; use the TUI for local control. See `plans/autonomous-survival-bot-prd.md` for the survival-bot pivot.
 
@@ -217,6 +227,8 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 🌱 **Phase 3 — Goal-driven autonomy** seeded: [`docs/memory-model.md`](./docs/memory-model.md) defines shared-knowledge vs personal-memory; per-server `goal.md` / `plan.md` / `current-task.json` / `diary/` shape autonomous behaviour.
 
 🌿 **Survival-bot pivot (2026-05-25)** — the bot is becoming a self-sufficient survival resident of the configured server. **MC chat is dialog-only**; operator/player chat commands are recorded but not dispatched (TUI is the only local control plane). The hybrid runtime now has enriched perception, priority modes, a skill-driven curriculum, food acquisition, bed/sleep, base/chest/shelter/farm skills, persistent skill metrics, scenario memory, and a scoped auto-patch loop with `npm test` smoke gating. Full plan: `plans/autonomous-survival-bot-prd.md` (local-only, gitignored).
+
+🌿 **v0.2.0 — self-learning agent (2026-05-27).** SQLite-backed knowledge base at `state/<host>/knowledge.db` with seeded recipes / mob intel / block intel / 12 starter lessons. Every death is captured with full context into a `deaths` table; a periodic Pi-coach loop (≤3 calls/hour, 12-min cooldown) batches unanalysed deaths and extracts generalised lessons. The reflex chain consults `coach/advice` before every dispatch — high-confidence lessons can override (`attack creeper` → `survive.flee`) or back-off. Bot narrates major events in Russian MC chat (≤8 lines/hour, ≥75 s gap). Auto-patch now opens a **PR for operator review** instead of cherry-picking onto `main` — `main` is protected, the operator is the only approver. Design: [`docs/v0.2.0-self-learning.md`](./docs/v0.2.0-self-learning.md).
 
 Full plan: [`docs/roadmap.md`](./docs/roadmap.md). Memory layout: [`docs/memory-model.md`](./docs/memory-model.md). Day-to-day judgement: "Operating principles" in [`AGENTS.md`](./AGENTS.md).
 

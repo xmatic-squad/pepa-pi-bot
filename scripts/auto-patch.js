@@ -3,18 +3,26 @@
 //
 // Unattended sibling of propose-apply.js. Picks an *unapproved* proposal,
 // moves it to approved/, branches off main, runs `pi -p` headless, and if Pi
-// commits something — cherry-picks the commit back into main. The point is
-// to close the self-improvement loop with no operator interaction.
+// commits something — pushes the branch to origin and opens a GitHub PR for
+// operator review. The operator is the only one who can merge into main
+// (enforced by branch protection rules).
+//
+// This is a v0.2.0 behavioural change. Earlier versions cherry-picked
+// auto-patch commits straight onto main, which caused chaotic merge races
+// against operator work. Now main is review-only.
 //
 // Exit codes:
-//   0  patch applied cleanly (commit on main)
+//   0  PR opened cleanly (or already exists)
 //   1  pi spawned but produced no commit (no change to repo)
 //   2  preflight failed (dirty tree, missing proposal, etc.)
 //   3  pi exited non-zero
-//   4  cherry-pick conflict — left in unresolved state on a branch
+//   4  push or `gh pr create` failed — branch left on disk for inspection
+//   5  optional fallback path: PR open disabled and cherry-pick conflict
+//
+// Override:
+//   PEPA_AUTO_PATCH_MERGE=cherry-pick   ← legacy direct-merge (NOT recommended)
 //
 // Designed to be launched by runtime/auto-improve.js as a detached child.
-// We deliberately avoid touching anything outside the repo and don't push.
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -249,19 +257,70 @@ pi.on("exit", async (code) => {
 	}
 	log("info", "smoke gate passed");
 
-	// Cherry-pick onto main.
-	git(["checkout", "main"]);
-	const cherry = git(["cherry-pick", newHead]);
-	if (cherry.status !== 0) {
-		log("error", `cherry-pick failed: ${cherry.stderr}`);
-		// Leave the branch around for operator inspection; abort the failed
-		// cherry-pick so main is clean.
-		git(["cherry-pick", "--abort"]);
-		exit(4, `cherry-pick conflict — see branch ${branch}`);
+	// v0.2.0 default: push branch + open PR. The operator approves the merge.
+	const mode = (process.env.PEPA_AUTO_PATCH_MERGE || "pr").toLowerCase();
+	if (mode === "cherry-pick") {
+		// Legacy direct-to-main path (NOT recommended; bypasses operator review).
+		git(["checkout", "main"]);
+		const cherry = git(["cherry-pick", newHead]);
+		if (cherry.status !== 0) {
+			log("error", `cherry-pick failed: ${cherry.stderr}`);
+			git(["cherry-pick", "--abort"]);
+			exit(5, `cherry-pick conflict — see branch ${branch}`);
+		}
+		git(["branch", "-D", branch]);
+		log("info", `patch applied to main as ${git(["rev-parse", "HEAD"]).stdout.trim().slice(0, 8)} (cherry-pick mode)`);
+		exit(0, `applied ${filenameArg}`);
 	}
 
-	// Success — delete the feature branch (the commit is on main now).
-	git(["branch", "-D", branch]);
-	log("info", `patch applied to main as ${git(["rev-parse", "HEAD"]).stdout.trim().slice(0, 8)}`);
-	exit(0, `applied ${filenameArg}`);
+	// Default: push the auto/<slug> branch to origin and open a PR.
+	// Operator reviews + merges on GitHub.
+	log("info", `pushing branch ${branch} to origin`);
+	const push = git(["push", "-u", "origin", branch]);
+	if (push.status !== 0) {
+		log("error", `git push failed: ${push.stderr}`);
+		git(["checkout", "main"]);
+		exit(4, `push failed — branch left on disk: ${branch}`);
+	}
+
+	// Build a PR body from the proposal file + Pi's commit message.
+	const proposalBody = (() => {
+		try { return fs.readFileSync(proposal.path, "utf8"); } catch { return ""; }
+	})();
+	const piCommitMsg = git(["log", "-1", "--format=%B", newHead]).stdout.trim();
+	const prTitle = `auto-patch: ${slug}`.slice(0, 70);
+	const prBody = [
+		"## Auto-generated patch",
+		"",
+		"This PR was produced by `scripts/auto-patch.js` from the proposal below.",
+		"Tests passed before push. Review the diff and merge when you're happy.",
+		"",
+		"## Pi commit",
+		"",
+		"```",
+		piCommitMsg.slice(0, 4000),
+		"```",
+		"",
+		"## Proposal",
+		"",
+		proposalBody.slice(0, 8000),
+	].join("\n");
+
+	const prArgs = [
+		"pr", "create",
+		"--base", "main",
+		"--head", branch,
+		"--title", prTitle,
+		"--body", prBody,
+	];
+	const pr = spawnSync("gh", prArgs, { cwd: REPO_ROOT, encoding: "utf8" });
+	if (pr.status !== 0) {
+		log("error", `gh pr create failed: ${pr.stderr || pr.stdout}`);
+		git(["checkout", "main"]);
+		exit(4, `pr create failed — branch ${branch} pushed but no PR`);
+	}
+	const prUrl = (pr.stdout || "").trim().split("\n").pop();
+	log("info", `PR opened: ${prUrl}`);
+	git(["checkout", "main"]);
+	exit(0, `pr opened ${prUrl}`);
 });
