@@ -39,16 +39,18 @@ test("extractJson: tolerates fences and surrounding text", () => {
 	assert.equal(extractJson(""), null);
 });
 
-test("buildPrompt: includes all death rows and JSON schema hint", () => {
+test("buildPrompt: returns {system, user}, includes all death rows + improvements schema", () => {
 	const rows = [
 		{ id: 1, ts: Date.now(), x: 100, y: 64, z: 200, cause: "hostile", hostile: "creeper", last_skill: "gather.logs", last_skill_code: "timeout", food_at_death: 14, context_blob: JSON.stringify({ recentScenarios: [{ skillId: "gather.logs", code: "timeout" }] }) },
 		{ id: 2, ts: Date.now(), x: 102, y: 64, z: 201, cause: "hostile", hostile: "creeper", last_skill: "explore.far", last_skill_code: "done", food_at_death: 12, context_blob: null },
 	];
-	const prompt = buildPrompt(rows);
-	assert.match(prompt, /death id=1/);
-	assert.match(prompt, /death id=2/);
-	assert.match(prompt, /creeper/);
-	assert.match(prompt, /Reply with ONE JSON object/);
+	const { system, user } = buildPrompt(rows);
+	assert.match(user, /death id=1/);
+	assert.match(user, /death id=2/);
+	assert.match(user, /creeper/);
+	assert.match(system, /Reply with ONE JSON object/);
+	assert.match(system, /improvements/);
+	assert.match(system, /Valid skill ids/);
 });
 
 test("captureDeath: builds a row with context blob and inferred cause", () => {
@@ -88,7 +90,7 @@ test("attach + emit('death'): inserts row in knowledge DB", async () => {
 	rmSync(stateDir, { recursive: true, force: true });
 });
 
-test("drainOnce: respects budget and parses Pi reply", async () => {
+test("drainOnce: respects budget and parses analytical LLM reply (incl. improvements)", async () => {
 	const stateDir = mkdtempSync(join(tmpdir(), "pepa-coach-test-"));
 	__resetForTests();
 	await initKnowledge({ stateDir });
@@ -105,7 +107,13 @@ test("drainOnce: respects budget and parses Pi reply", async () => {
 
 	const lessonsBefore = recall({ category: "combat" }).length;
 
-	const fakeReply = JSON.stringify({
+	// TimeWeb path needs env vars to satisfy the llmAvailable check.
+	const prevKey = process.env.TIMEWEB_API_KEY;
+	const prevModel = process.env.TIMEWEB_MODEL;
+	process.env.TIMEWEB_API_KEY = "test-key";
+	process.env.TIMEWEB_MODEL = "test-model";
+
+	const fakeReply = {
 		cause: "creeper_explosion_unarmed",
 		next_action: "shelter at dusk",
 		lessons: [{
@@ -116,16 +124,23 @@ test("drainOnce: respects budget and parses Pi reply", async () => {
 			prefer_skill: "survive.flee",
 			confidence: 0.85,
 		}],
-	});
-	const askPi = ({ onChunk, onDone }) => {
-		onChunk({ stream: "stdout", text: fakeReply });
-		onDone({ code: 0 });
+		improvements: [
+			{ title: "Add craft.shield skill", description: "No skill to craft a shield when creepers are around.", category: "skill", priority: 2 },
+		],
 	};
+	const askAnalyticalFn = async () => fakeReply;
 
-	const result = await drainOnce({ askPi, stateDir, force: true });
+	const result = await drainOnce({ stateDir, force: true, askAnalyticalFn });
+
+	if (prevKey === undefined) delete process.env.TIMEWEB_API_KEY;
+	else process.env.TIMEWEB_API_KEY = prevKey;
+	if (prevModel === undefined) delete process.env.TIMEWEB_MODEL;
+	else process.env.TIMEWEB_MODEL = prevModel;
+
 	assert.equal(result.ok, true);
 	assert.equal(result.analysed, 1);
 	assert.equal(result.lessons, 1);
+	assert.equal(result.improvements, 1);
 
 	const after = recall({ hostile: "creeper", category: "combat" });
 	assert.ok(after.length > lessonsBefore, "new lesson recorded");
@@ -137,18 +152,20 @@ test("drainOnce: respects budget and parses Pi reply", async () => {
 	rmSync(stateDir, { recursive: true, force: true });
 });
 
-test("drainOnce: empty queue → ok with 0 analysed", async () => {
+test("drainOnce: skipped when LLM not configured", async () => {
 	const stateDir = mkdtempSync(join(tmpdir(), "pepa-coach-test-"));
 	__resetForTests();
 	await initKnowledge({ stateDir });
 	if (!isAvailable()) {
-		assert.ok(true);
 		rmSync(stateDir, { recursive: true, force: true });
 		return;
 	}
-	const result = await drainOnce({ askPi: () => {}, stateDir, force: true });
-	assert.equal(result.ok, true);
-	assert.equal(result.analysed, 0);
+	const prevKey = process.env.TIMEWEB_API_KEY;
+	delete process.env.TIMEWEB_API_KEY;
+	const result = await drainOnce({ stateDir, force: true });
+	if (prevKey !== undefined) process.env.TIMEWEB_API_KEY = prevKey;
+	assert.equal(result.ok, false);
+	assert.equal(result.reason, "llm not configured");
 	closeStore();
 	rmSync(stateDir, { recursive: true, force: true });
 });

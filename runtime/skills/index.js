@@ -118,6 +118,7 @@ export const RUNNER_CODES = Object.freeze({
 	TIMEOUT: "timeout",
 	THREW: "threw",
 	VALIDATION_FAILED: "validation_failed",
+	PREEMPTED: "preempted",
 	DONE: "done",
 });
 
@@ -137,6 +138,42 @@ function withTimeout(promise, ms, label) {
 		timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
 	});
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// v0.3.0-rc.3 — wrap execute() so that if ctx.abortSignal fires we
+// stop awaiting (and surface code: "preempted"). The skill itself
+// doesn't need to read the signal — the race below ensures runSkill
+// returns control to the reflex within one microtask of abort(). The
+// skill's own async work may continue in the background harmlessly,
+// because the next dispatch will overwrite any shared state.
+function raceWithAbort(promise, signal) {
+	if (!signal) return promise;
+	if (signal.aborted) {
+		return Promise.reject(Object.assign(new Error("preempted"), { _preempted: true }));
+	}
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		const onAbort = () => {
+			if (settled) return;
+			settled = true;
+			reject(Object.assign(new Error("preempted"), { _preempted: true }));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(v) => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener?.("abort", onAbort);
+				resolve(v);
+			},
+			(e) => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener?.("abort", onAbort);
+				reject(e);
+			},
+		);
+	});
 }
 
 // Drive one skill through its full lifecycle. The caller (typically reflex.js
@@ -172,12 +209,19 @@ export async function runSkill(id, ctx, args = {}) {
 	const timeoutMs = skill.timeoutMs ?? 30_000;
 	let raw;
 	try {
-		raw = await withTimeout(skill.execute(ctx, args), timeoutMs, `skill(${id})`);
+		raw = await withTimeout(
+			raceWithAbort(skill.execute(ctx, args), ctx?.abortSignal),
+			timeoutMs,
+			`skill(${id})`,
+		);
 	} catch (e) {
 		const isTimeout = /timed out after/.test(e.message);
+		const isPreempted = e?._preempted === true;
 		const result = {
 			ok: false,
-			code: isTimeout ? RUNNER_CODES.TIMEOUT : RUNNER_CODES.THREW,
+			code: isPreempted
+				? RUNNER_CODES.PREEMPTED
+				: isTimeout ? RUNNER_CODES.TIMEOUT : RUNNER_CODES.THREW,
 			detail: e.message,
 			worldDelta: null,
 		};

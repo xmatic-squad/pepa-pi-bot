@@ -117,10 +117,16 @@ test("normalisePreferSkill: passes through known dot-form skills unchanged", () 
 	assert.equal(normalisePreferSkill("explore.far"), "explore.far");
 });
 
-test("normalisePreferSkill: unknown values returned as-is", () => {
-	assert.equal(normalisePreferSkill("some.unknown.skill"), "some.unknown.skill");
+test("normalisePreferSkill: unknown values rejected (returns null)", () => {
+	// v0.3.0-rc.1: anything not in the live registry and not a known mode
+	// name is rejected outright. We'd rather fall through to 'avoid' than
+	// dispatch a hallucinated skill id.
+	assert.equal(normalisePreferSkill("some.unknown.skill"), null);
+	assert.equal(normalisePreferSkill("relocate.surface"), null);
+	assert.equal(normalisePreferSkill("choose.safe.surface"), null);
+	assert.equal(normalisePreferSkill("survive.shelter"), null);
 	assert.equal(normalisePreferSkill(null), null);
-	assert.equal(normalisePreferSkill(""), "");
+	assert.equal(normalisePreferSkill(""), null);
 });
 
 test("consult: Pi-style mode-name prefer is normalised to override target", async () => {

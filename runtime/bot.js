@@ -60,7 +60,9 @@ import { createOwnedBlocksLedger } from "./owned-blocks.js";
 import { initKnowledge } from "./knowledge/index.js";
 import { attach as attachCoach } from "./coach/postmortem.js";
 import { attach as attachReflect } from "./coach/reflect.js";
+import { attach as attachTuner } from "./coach/trigger-tuner.js";
 import { attach as attachChatter } from "./persona/chatter.js";
+import { attachAwareness } from "./awareness/events.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -78,6 +80,7 @@ const ESCALATION_COOLDOWN_MS = 10 * 60 * 1000;
 
 let bot = null;
 let pathWatchdog = null;
+let awarenessState = null;
 let reflexPaused = false;
 let tickTimer = null;
 let reconnectTimer = null;
@@ -237,6 +240,19 @@ function dispatchAction(fn, label, opts = {}) {
 	}
 	reflexCtx.busy = true;
 	reflexCtx.currentActionLabel = label;
+	// Rolling window of last 8 dispatched skill ids — read by
+	// runtime/coach/advisor-trigger.js to detect loops (4+ same in a row)
+	reflexCtx.recentSkillIds = reflexCtx.recentSkillIds ?? [];
+	reflexCtx.recentSkillIds.push(label);
+	if (reflexCtx.recentSkillIds.length > 8) reflexCtx.recentSkillIds.shift();
+	// v0.3.0-rc.3 — pre-emption: each dispatch gets a fresh AbortController.
+	// awareness/events.js#onPreempt fires controller.abort() when the env
+	// shocks (forced move, HP plunge, hostile spawn) the current skill
+	// shouldn't run against. runSkill races execute() with the signal and
+	// returns code: "preempted" within one microtask.
+	const dispatchAbort = new AbortController();
+	reflexCtx.currentAbort = dispatchAbort;
+	reflexCtx.abortSignal = dispatchAbort.signal;
 	const startedAt = Date.now();
 	// Capture the situation hash BEFORE the action runs so a failure is
 	// attributable to the state at dispatch time, not the state after the
@@ -312,6 +328,10 @@ function dispatchAction(fn, label, opts = {}) {
 		.finally(() => {
 			reflexCtx.busy = false;
 			reflexCtx.currentActionLabel = null;
+			if (reflexCtx.currentAbort === dispatchAbort) {
+				reflexCtx.currentAbort = null;
+				reflexCtx.abortSignal = null;
+			}
 		});
 }
 
@@ -670,9 +690,29 @@ function connect() {
 		// v0.2.0 — self-learning coach + persona narration. Both are
 		// import-safe; they just attach listeners and (for coach) a periodic
 		// Pi-drain timer. See docs/v0.2.0-self-learning.md.
-		try { attachCoach(bot, { stateDir, askPi }); } catch (e) { warn("coach", `attach: ${e?.message ?? e}`); }
-		try { attachReflect({ bot, stateDir, askPi, getSnapshot: () => lastSnapshot }); } catch (e) { warn("reflect", `attach: ${e?.message ?? e}`); }
+		// v0.3.0 — coach/reflect run on TimeWeb (fast LLM). Pi CLI is no
+		// longer wired into background loops; it remains available for
+		// manual operator commands only.
+		try { attachCoach(bot, { stateDir }); } catch (e) { warn("coach", `attach: ${e?.message ?? e}`); }
+		try { attachReflect({ bot, stateDir, getSnapshot: () => lastSnapshot }); } catch (e) { warn("reflect", `attach: ${e?.message ?? e}`); }
+		try { attachTuner(); } catch (e) { warn("tuner", `attach: ${e?.message ?? e}`); }
 		try { attachChatter(bot, { getSnapshot: () => lastSnapshot }); } catch (e) { warn("persona", `attach: ${e?.message ?? e}`); }
+		// v0.3.0-rc.3 — awareness layer: listens to bot.on('move'/'health'/
+		// 'entitySpawn'/'blockUpdate') and aborts the current dispatch via
+		// reflexCtx.currentAbort when something disrupts the in-flight skill.
+		try {
+			awarenessState = attachAwareness(bot, {
+				onPreempt: ({ reason, payload }) => {
+					const abort = reflexCtx.currentAbort;
+					if (abort && !abort.signal.aborted) {
+						info("preempt", `aborting ${reflexCtx.currentActionLabel ?? "?"} due to ${reason}`);
+						abort.abort();
+					}
+					reflexCtx.lastPreempt = { reason, payload, at: Date.now() };
+				},
+			});
+			reflexCtx.awareness = awarenessState;
+		} catch (e) { warn("awareness", `attach: ${e?.message ?? e}`); }
 	});
 
 	bot.on("messagestr", (text) => {

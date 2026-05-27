@@ -179,3 +179,63 @@ CREATE TABLE IF NOT EXISTS code_changes (
   outcome         TEXT,                      -- 'applied'|'rolled_back'|'rejected'
   notes           TEXT
 );
+
+----------------------------------------------------------------------
+-- Advisor recommendations (v0.3.0+ fast LLM trail)
+-- Every time runtime/coach/advisor-trigger.js asks the fast LLM and
+-- the answer is cached on ctx, we write a row here. When the reflex
+-- consumes the recommendation and dispatches, we attach the dispatch
+-- result later via outcome_ok / outcome_code. The history is the
+-- ground truth for trigger-tuner.js stats and for the operator's
+-- "what is the LLM suggesting and is it actually helping" question.
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS advisor_recommendations (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts                  INTEGER NOT NULL,
+  trigger_reason      TEXT NOT NULL,           -- 'wedged_*', 'repeat_*', 'preempt_retry_*', 'emergency_*'
+  planned_skill       TEXT,                    -- what manifesto/curriculum was about to dispatch
+  recommended_skill   TEXT,                    -- what the LLM said to do instead
+  action              TEXT NOT NULL,           -- 'switch_skill' | 'continue' | 'wait'
+  rationale           TEXT,
+  active_need         TEXT,                    -- 'L2 tools_wood' etc.
+  tokens_in           INTEGER,
+  tokens_out          INTEGER,
+  latency_ms          INTEGER,
+  applied             INTEGER NOT NULL DEFAULT 0,  -- 1 if reflex actually dispatched recommended_skill
+  outcome_ok          INTEGER,                  -- NULL until dispatch finishes
+  outcome_code        TEXT,
+  outcome_at          INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_advisor_ts        ON advisor_recommendations(ts);
+CREATE INDEX IF NOT EXISTS idx_advisor_trigger   ON advisor_recommendations(trigger_reason);
+CREATE INDEX IF NOT EXISTS idx_advisor_outcome   ON advisor_recommendations(outcome_ok);
+
+----------------------------------------------------------------------
+-- Improvement requests (v0.3.0+)
+-- The LLM (postmortem / reflect / advisor) can flag situations where
+-- the bot lacked the right skill or feature. Instead of trying to
+-- self-patch (which we explicitly disabled), it writes an entry here.
+-- The operator reads `scripts/list-improvements.js` and decides what
+-- to implement. Implemented entries get marked so the bot stops
+-- re-flagging the same gap.
+----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS improvement_requests (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts              INTEGER NOT NULL,
+  source          TEXT NOT NULL,                -- 'postmortem'|'reflect'|'advisor'|'tuner'|'manual'
+  category        TEXT,                          -- 'skill'|'tuning'|'perception'|'planning'|'social'|'other'
+  title           TEXT NOT NULL,
+  description     TEXT,
+  context         TEXT,                          -- JSON: position, snapshot tail, related lesson ids
+  priority        INTEGER NOT NULL DEFAULT 3,    -- 1..5 (1=urgent, 5=nice-to-have)
+  status          TEXT NOT NULL DEFAULT 'open',  -- 'open'|'in_progress'|'implemented'|'rejected'|'duplicate'
+  duplicate_of    INTEGER,                       -- another row id if dup
+  votes           INTEGER NOT NULL DEFAULT 1,    -- bumped each time the bot re-flags same gap
+  implemented_at  INTEGER,
+  notes           TEXT,
+  FOREIGN KEY (duplicate_of) REFERENCES improvement_requests(id)
+);
+CREATE INDEX IF NOT EXISTS idx_improvements_status   ON improvement_requests(status);
+CREATE INDEX IF NOT EXISTS idx_improvements_priority ON improvement_requests(priority);
+CREATE INDEX IF NOT EXISTS idx_improvements_source   ON improvement_requests(source);
+CREATE INDEX IF NOT EXISTS idx_improvements_ts       ON improvement_requests(ts);
