@@ -113,16 +113,23 @@ export const STORYLINE = Object.freeze([
 		narration_ru: "Где я? Осмотрюсь и оценю место.",
 		completed(snap) {
 			if (!snap?.connected) return false;
-			// Considered done once HP is full and we've moved a bit (out of
-			// spawn confusion) or we know nearby blocks include something tangible.
 			const hp = snap.health ?? 20;
-			const moved = snap._sessionMs ? snap._sessionMs > 15_000 : true;
+			// Two completion paths: (a) classic — full HP + saw tangible
+			// blocks within 16 blocks. (b) timeout — HP=full + session
+			// >120s. Path (b) exists because in desert/ocean biomes the
+			// scan radius might never see logs/stone/crops/beds, and we
+			// were getting stuck on step 1 for hours.
+			if (hp < 18) return false;
 			const sawBlocks = (snap.nearbyBlocks?.logs ?? 0)
 				+ (snap.nearbyBlocks?.stone ?? 0)
 				+ (snap.nearbyBlocks?.crops ?? 0)
 				+ (snap.nearbyBlocks?.beds ?? 0)
 				> 0;
-			return hp >= 18 && moved && sawBlocks;
+			if (sawBlocks) return true;
+			// Fallback: settled for long enough → call orient done and let
+			// later steps drive forward into the biome.
+			const sessionMs = snap._sessionMs ?? 0;
+			return sessionMs > 120_000;
 		},
 		suggestSkill(snap) {
 			// Look around — wander a bit to get a snapshot of what's nearby.
@@ -141,7 +148,10 @@ export const STORYLINE = Object.freeze([
 		suggestSkill(snap) {
 			const trees = snap?.nearbyBlocks?.logs ?? 0;
 			if (trees > 0) return { skillId: "gather.logs" };
-			// No tree in sight — scout further.
+			// No tree in sight — scout further. In a biome with no trees
+			// (desert, ocean) the bot must commit to a long heading; the
+			// curriculum's wedge detector (v0.3.1+) elevates this to
+			// village.relocate after a few cycles.
 			return { skillId: "explore.far", args: { searchFor: "logs" } };
 		},
 		emergencyPause,
@@ -196,7 +206,16 @@ export const STORYLINE = Object.freeze([
 			return countAny(snap?.inventory, FOOD_ITEMS) >= 2;
 		},
 		suggestSkill(snap) {
-			return { skillId: "survive.acquire-food" };
+			// Two-tier strategy:
+			//  - If a passive food mob is visible nearby (≤24 blocks in
+			//    snapshot), kill it locally with acquire-food.
+			//  - Otherwise scout-food does long-range biome-aware search.
+			//    It commits to a cardinal for ~200 blocks, rescans, and
+			//    on biome boundary detection heads toward food-capable
+			//    terrain.
+			const hasPassiveNearby = (snap?.nearbyEntities?.passives?.length ?? 0) > 0;
+			if (hasPassiveNearby) return { skillId: "survive.acquire-food" };
+			return { skillId: "survive.scout-food" };
 		},
 		emergencyPause,
 	},

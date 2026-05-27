@@ -80,6 +80,7 @@ const ESCALATE_AFTER_NOOPS = 20;
 const ESCALATION_COOLDOWN_MS = 10 * 60 * 1000;
 
 let bot = null;
+let botSpawnedAt = 0;
 let pathWatchdog = null;
 let awarenessState = null;
 let reflexPaused = false;
@@ -677,6 +678,7 @@ function connect() {
 	reflexCtx.bot = bot;
 
 	bot.once("spawn", () => {
+		botSpawnedAt = Date.now();
 		info("mc", `spawned at ${JSON.stringify(bot.entity.position)}`);
 		appendDiary(`spawned at ${bot.entity.position.x.toFixed(0)},${bot.entity.position.y.toFixed(0)},${bot.entity.position.z.toFixed(0)}`);
 		ipc?.broadcast(EVENT_TYPES.STATUS, buildSnapshot(bot));
@@ -845,6 +847,9 @@ function tick() {
 		}
 		const curriculumEarly = nextCurriculumMilestone(lastSnapshot);
 		lastSnapshot.curriculum = curriculumEarly;
+		// Time since spawn — used by storyline orient_self to fall through
+		// when bot is in a barren biome that never produces "saw blocks".
+		lastSnapshot._sessionMs = botSpawnedAt ? Date.now() - botSpawnedAt : 0;
 		// Storyline current step — surfaced in snapshot so chatter and
 		// other observers can react to step transitions without
 		// re-importing the picker.

@@ -111,6 +111,16 @@ test("pickCurrentStep: fresh spawn → first non-completed step", () => {
 	assert.equal(r.index, 0);
 });
 
+test("orient_self: barren biome timeout fallback completes step after 120s", () => {
+	const n = getStep("orient_self");
+	// path (a): full HP + no visible blocks + short session → NOT done (would block).
+	assert.equal(n.completed(snap({ _sessionMs: 30_000, nearbyBlocks: {} })), false);
+	// path (b): full HP + no visible blocks + long session → done (timeout fallback).
+	assert.equal(n.completed(snap({ _sessionMs: 150_000, nearbyBlocks: {} })), true);
+	// always: low HP → not done
+	assert.equal(n.completed(snap({ health: 8, _sessionMs: 150_000 })), false);
+});
+
 test("pickCurrentStep: bot with 8+ logs → first_wood done, picks crafting_basics", () => {
 	_resetForTest();
 	const r = pickCurrentStep(snap({

@@ -52,6 +52,7 @@ function makeCtx({
 	disableAdvisor = true,   // advisor-trigger fires real async LLM calls,
 	                          // tested directly in advisor-trigger.test.js.
 	disableStoryline = true, // storyline tested in goal/storyline.test.js
+	disableWedge = true,     // wedge tested in awareness/wedge-detector.test.js
 } = {}) {
 	const dispatches = [];
 	const ctx = {
@@ -67,6 +68,7 @@ function makeCtx({
 		disableManifesto,
 		disableAdvisor,
 		disableStoryline,
+		disableWedge,
 		dispatch(fn, label, opts = {}) {
 			dispatches.push({ fn, label, opts });
 		},

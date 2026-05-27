@@ -30,6 +30,7 @@ import { tickAdvisor, consumeFreshRecommendation } from "./coach/advisor-trigger
 import { markRecommendationApplied, markRecommendationOutcome } from "./knowledge/index.js";
 import { pickActiveNeed } from "./manifesto/state.js";
 import { pickCurrentStep } from "./goal/state.js";
+import { observe as observeWedge, isWedged } from "./awareness/wedge-detector.js";
 import { situationHash } from "./scenario-memory.js";
 import { tickModes } from "./modes.js";
 
@@ -458,6 +459,29 @@ function curriculumReflex(ctx) {
 		ctx.activeNeed = activeNeed;
 	}
 	const manifestoSkillId = activeNeed?.skillId ?? null;
+
+	// v0.3.1 — wedge detector. Feeds position into rolling-bbox tracker.
+	// When bot has been stuck in a <50-block bbox for 10 minutes with
+	// the same need cycling its skills, returns wedged=true and we
+	// short-circuit to village.relocate which walks 300 blocks in a
+	// fresh cardinal. Tests pass ctx.disableWedge=true to skip.
+	if (!ctx.disableWedge && s.position) {
+		observeWedge({
+			x: s.position.x, z: s.position.z,
+			activeNeedId: activeNeed?.need?.id ?? null,
+			recentSkillIds: ctx.recentSkillIds ?? [],
+		});
+		const wedge = isWedged({
+			activeNeedId: activeNeed?.need?.id ?? null,
+			recentSkillIds: ctx.recentSkillIds ?? [],
+		});
+		if (wedge.wedged) {
+			ctx.lastCurriculumAt = Date.now();
+			info(REFLEX_LOG, `wedged: bbox=${Math.round(wedge.bboxDim)}b need=${activeNeed?.need?.id} for ${Math.round(wedge.needAgeMs / 1000)}s → village.relocate`);
+			ctx.dispatch(() => runSkill("village.relocate", ctx), "village.relocate", {});
+			return { action: "dispatched", kind: "wedge-relocate", label: "village.relocate" };
+		}
+	}
 
 	// v0.3.1 — storyline: the canonical Minecraft survival quest. Gives
 	// the bot a concrete, narratable next-action ("collect 8 logs",
