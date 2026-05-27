@@ -1,6 +1,6 @@
 {
   "name": "pepa-pi-bot",
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "private": true,
   "description": "An autonomous, self-extending Minecraft player powered by Pi and Mineflayer.",
   "license": "MIT",
@@ -31,6 +31,7 @@
     "mineflayer-pathfinder": "^2.4.5",
     "mineflayer-pvp": "^1.3.2",
     "mineflayer-tool": "^1.2.0",
+    "better-sqlite3": "^11.3.0",
     "prismarine-item": "^1.18.0",
     "prismarine-viewer": "^1.33.0",
     "react": "^19.2.6",
