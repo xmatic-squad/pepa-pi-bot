@@ -57,9 +57,17 @@ import { createSkillMetrics } from "./skill-metrics.js";
 import { createWorldJournal } from "./world-journal.js";
 import { createScenarioMemory, situationHash } from "./scenario-memory.js";
 import { createOwnedBlocksLedger } from "./owned-blocks.js";
+import { initKnowledge } from "./knowledge/index.js";
+import { attach as attachCoach } from "./coach/postmortem.js";
+import { attach as attachChatter } from "./persona/chatter.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
+
+// Knowledge subsystem boots in the background. If better-sqlite3 isn't
+// installed the call returns false and every knowledge API becomes a
+// safe no-op. See docs/v0.2.0-self-learning.md.
+initKnowledge({ stateDir }).catch((e) => warn("knowledge", `init failed: ${e?.message ?? e}`));
 
 // Auto-escalation tunables. With tick=3s, 20 noops ≈ 1 minute idle before we
 // even consider asking Pi. Cooldown prevents spamming the LLM when the bot
@@ -658,6 +666,11 @@ function connect() {
 			pathWatchdog = createPathfinderWatchdog(bot);
 			info("pathfinder", "stuck-replan watchdog armed");
 		} catch (e) { warn("pathfinder", `watchdog start failed: ${e?.message ?? e}`); }
+		// v0.2.0 — self-learning coach + persona narration. Both are
+		// import-safe; they just attach listeners and (for coach) a periodic
+		// Pi-drain timer. See docs/v0.2.0-self-learning.md.
+		try { attachCoach(bot, { stateDir, askPi }); } catch (e) { warn("coach", `attach: ${e?.message ?? e}`); }
+		try { attachChatter(bot, { getSnapshot: () => lastSnapshot }); } catch (e) { warn("persona", `attach: ${e?.message ?? e}`); }
 	});
 
 	bot.on("messagestr", (text) => {
