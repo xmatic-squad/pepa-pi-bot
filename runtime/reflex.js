@@ -26,6 +26,7 @@ import {
 } from "./actions.js";
 import { runSkill, getSkill } from "./skills/index.js";
 import { consult as consultAdvice, reportOutcome as reportAdviceOutcome } from "./coach/advice.js";
+import { pickActiveNeed } from "./manifesto/state.js";
 import { situationHash } from "./scenario-memory.js";
 import { tickModes } from "./modes.js";
 
@@ -438,6 +439,22 @@ function curriculumReflex(ctx) {
 	const plan = s.curriculum?.plan;
 	const wanderHintUntil = ctx.skillBackoff?.["__wander_hint__"] ?? 0;
 	const wantWander = wanderHintUntil && Date.now() < wanderHintUntil;
+
+	// v0.3.0-rc.2 — manifesto layer. Walk the L0-L10 needs ladder; the
+	// lowest unsatisfied need dictates the planned skill. The curriculum
+	// plan is used as a fallback when the manifesto has nothing concrete
+	// (e.g. armour pursue=null, or village_full with no specific next
+	// step). This is what makes the bot pursue tangible intermediate
+	// goals (tools_wood → shelter → tools_stone → ...) instead of
+	// wandering in the same quadrant.
+	//
+	// Tests can pass ctx.disableManifesto=true to exercise the curriculum
+	// branch in isolation without having to construct a full snapshot.
+	const activeNeed = ctx.disableManifesto ? null : pickActiveNeed(s);
+	if (activeNeed) {
+		ctx.activeNeed = activeNeed;
+	}
+	const manifestoSkillId = activeNeed?.skillId ?? null;
 	const metricRecovery = metricRecoverySkill(ctx, plan?.skillId);
 	if (metricRecovery) {
 		ctx.lastCurriculumAt = Date.now();
@@ -476,7 +493,7 @@ function curriculumReflex(ctx) {
 	// First hint → small wander (might just be 32-block reach issue).
 	// Every subsequent hint while still inside the backoff window → use
 	// explore.far so the bot actually leaves the patch it's stuck in.
-	if (!plan?.skillId || wantWander) {
+	if ((!plan?.skillId && !manifestoSkillId) || wantWander) {
 		ctx.lastCurriculumAt = Date.now();
 		const fallbackId = wantWander && consecutiveWanderHints >= 1 ? "explore.far" : "wander";
 		// v0.2.0-rc.3 — consult advice on the FALLBACK dispatch too. Without
@@ -511,15 +528,18 @@ function curriculumReflex(ctx) {
 		return { action: "dispatched", kind: "curriculum-wander", label: "wander" };
 	}
 
-	const skillId = plan.skillId;
+	// Pick what to dispatch: manifesto wins over curriculum plan because
+	// it expresses concrete needs rather than abstract "next milestone".
+	const skillId = manifestoSkillId ?? plan.skillId;
+	const skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
 	const skill = getSkill(skillId);
 	if (!skill) {
-		// Curriculum suggested a skill that isn't registered yet — fall back
+		// Suggested a skill that isn't registered yet — fall back
 		// to wander rather than spinning. This is the right behaviour for
 		// future milestones we haven't wired (e.g. shelter blueprints).
 		ctx.lastCurriculumAt = Date.now();
 		ctx.dispatch(() => wander(ctx.bot, 16), "wander", {});
-		return { action: "dispatched", kind: "curriculum-wander", label: `wander (no skill ${skillId})` };
+		return { action: "dispatched", kind: "curriculum-wander", label: `wander (no skill ${skillId}; source ${skillSource})` };
 	}
 
 	// Per-skill backoff: if this exact skill failed with a non-recoverable
@@ -558,7 +578,10 @@ function curriculumReflex(ctx) {
 	}
 
 	ctx.lastCurriculumAt = Date.now();
-	ctx.dispatch(() => runSkill(dispatchSkillId, ctx), dispatchSkillId, {
+	const dispatchArgs = (manifestoSkillId && manifestoSkillId === dispatchSkillId)
+		? (activeNeed.args ?? {})
+		: {};
+	ctx.dispatch(() => runSkill(dispatchSkillId, ctx, dispatchArgs), dispatchSkillId, {
 		onComplete: (res) => {
 			ctx.skillBackoff = ctx.skillBackoff ?? {};
 			if (advice.lessonId) reportAdviceOutcome({ lessonId: advice.lessonId, succeeded: !!res?.ok });
@@ -582,7 +605,7 @@ function curriculumReflex(ctx) {
 			}
 		},
 	});
-	return { action: "dispatched", kind: "curriculum-skill", label: dispatchSkillId };
+	return { action: "dispatched", kind: "curriculum-skill", label: dispatchSkillId, source: skillSource };
 }
 
 // ---- idle ------------------------------------------------------------------

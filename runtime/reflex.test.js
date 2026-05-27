@@ -46,6 +46,9 @@ function makeCtx({
 	lastSleepAttemptAt = 0,
 	lastCurriculumAt = 0,
 	metrics,
+	disableManifesto = true, // curriculum branch tests don't construct
+	                          // full snapshots; manifesto is exercised by
+	                          // runtime/manifesto/state.test.js separately.
 } = {}) {
 	const dispatches = [];
 	const ctx = {
@@ -58,6 +61,7 @@ function makeCtx({
 		lastCurriculumAt,
 		skillBackoff,
 		metrics,
+		disableManifesto,
 		dispatch(fn, label, opts = {}) {
 			dispatches.push({ fn, label, opts });
 		},
@@ -231,6 +235,55 @@ test("curriculum dispatches suggested skill by id", () => {
 	assert.equal(out.reflex, "curriculum");
 	assert.equal(dispatches[0].label, "gather.logs");
 	assert.ok(typeof dispatches[0].opts.onComplete === "function");
+});
+
+test("manifesto: hungry bot with no food drives survive.acquire-food (overrides curriculum plan)", () => {
+	const { ctx, dispatches } = makeCtx({
+		disableManifesto: false,
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 12,
+			hasFood: false,
+			inventory: {}, // no food, no tools
+			equipment: {},
+			nearbyBlocks: {},
+			hazards: { footBlock: "grass_block", belowBlock: "dirt", headBlock: "air" },
+			isDay: true,
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	assert.equal(dispatches[0].label, "survive.acquire-food", "manifesto L1 food took over");
+	assert.equal(ctx.activeNeed?.need?.id, "food");
+});
+
+test("manifesto: well-fed bot with all wood tools defers to curriculum plan", () => {
+	const { ctx, dispatches } = makeCtx({
+		disableManifesto: false,
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			hasFood: true,
+			inventory: {
+				bread: 8,
+				wooden_pickaxe: 1, wooden_axe: 1, wooden_sword: 1,
+				white_bed: 1,
+			},
+			equipment: {},
+			nearbyBlocks: { beds: 1 },
+			hazards: { footBlock: "grass_block", belowBlock: "dirt", headBlock: "air" },
+			isDay: true,
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	// L4 tools_stone unmet → gather.stone takes precedence even if curriculum says logs
+	assert.equal(dispatches[0].label, "gather.stone");
+	assert.equal(ctx.activeNeed?.need?.id, "tools_stone");
 });
 
 test("curriculum falls back to wander when no plan", () => {

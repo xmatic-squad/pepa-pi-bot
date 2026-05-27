@@ -55,7 +55,59 @@ Tests: 279 green (was 257 on rc.3). Added:
 - `runtime/llm/provider.test.js` — 9 tests
 - `runtime/coach/fast-advisor.test.js` — 10 tests
 
-### rc.2 — (pending) Manifesto / Needs ladder
+### rc.2 — Manifesto / Needs ladder L0-L10
+**Root problem solved**: pre-v0.3.0 the bot had no notion of intermediate
+goals. The curriculum produced a single "next milestone" but no
+hierarchy. So when the bot was wedged with no pickaxe, it kept trying
+`explore.far` instead of recognising "I need wood → planks → pickaxe
+first". Lessons from Pi couldn't help because there was no
+internal-state language to express "L2 not satisfied".
+
+The needs ladder gives the bot an explicit, ordered list of survival
+concerns. Each reflex tick picks the LOWEST unsatisfied need and
+dispatches a concrete skill toward it.
+
+```
+L0 alive          HP>5, food>0, no lava, no creeper@close
+L1 food           ≥6 food items in inventory (or hungry+have any)
+L2 tools_wood     wooden_pickaxe + wooden_axe + wooden_sword
+L3 shelter_basic  bed placed nearby or in inventory
+L4 tools_stone    stone tier (pickaxe + axe + sword)
+L5 armor_basic    any chestplate equipped (pursue=null for now)
+L6 food_security  ≥16 food items
+L7 tools_iron     iron tier (pursue=gather.stone until craft.iron-* lands)
+L8 armor_iron     iron chestplate (pursue=null for now)
+L9 village_seed   bed + chest nearby
+L10 village_full  global goal (never detected, falls through to curriculum)
+```
+
+- [`runtime/manifesto/needs.js`](../../runtime/manifesto/needs.js) —
+  catalogue of 11 needs. Each has `detect(snapshot)` and
+  `pursue(snapshot)`. Pursue can return `null` (e.g. armor levels) and
+  the ladder gracefully skips, recording the level as "blocked".
+- [`runtime/manifesto/state.js`](../../runtime/manifesto/state.js) —
+  `pickActiveNeed(snapshot)` walks the ladder, picks the first
+  unsatisfied + pursuable need. Returns `{need, skillId, args, blockedNeeds}`.
+  3-second cache to avoid re-walking the ladder on every micro-tick.
+  Validates `skillId` against the live registry (rc.1 piece) before
+  returning — manifesto can't ship a hallucinated id.
+- [`runtime/reflex.js`](../../runtime/reflex.js):
+  - `curriculumReflex` now consults manifesto FIRST. If a need dictates
+    a skill, that's what gets dispatched. The curriculum plan is the
+    fallback when manifesto has no concrete pursue.
+  - Tests can pass `ctx.disableManifesto = true` to exercise the
+    curriculum branch in isolation.
+- [`runtime/coach/reflect.js`](../../runtime/coach/reflect.js) — Pi
+  self-reflection prompt now includes the active need
+  (`L2 tools_wood → gather.logs (Деревянные орудия)`) so Pi can give
+  level-appropriate advice instead of generic suggestions.
+
+Tests: 315 green (was 279 on rc.1, +36 new):
+- `runtime/manifesto/needs.test.js` — 24 tests (one per need detect/pursue)
+- `runtime/manifesto/state.test.js` — 10 tests (ladder walk, caching, skipping)
+- `runtime/reflex.test.js` — 2 new integration tests (manifesto-on
+  overrides curriculum; well-fed bot pursues tools_stone)
+
 ### rc.3 — (pending) Event-driven awareness + skill pre-emption
 
 ## Next session quick start
