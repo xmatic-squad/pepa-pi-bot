@@ -540,16 +540,29 @@ function curriculumReflex(ctx) {
 		return { action: "dispatched", kind: "curriculum-wander", label: "wander" };
 	}
 
-	// Pick what to dispatch. Order: manifesto > storyline > curriculum.
-	// Manifesto is highest because L0 alive emergencies (lava, low-HP +
-	// hostile) must override any narrative aspiration. Storyline beats
-	// curriculum because it expresses a concrete operational subgoal,
-	// not just "next milestone".
-	let skillId = manifestoSkillId ?? storySkillId ?? plan.skillId;
-	let skillSource = manifestoSkillId
-		? `manifesto:${activeNeed.need.id}`
-		: storySkillId ? `storyline:${storyStep.step.id}`
-		: "curriculum";
+	// Pick what to dispatch. Order:
+	//   1. manifesto L0 (alive emergencies: low HP near hostile, lava
+	//      under foot, food=0) — absolute priority; do NOT let
+	//      storyline overrule a "you're dying" signal.
+	//   2. storyline — concrete narrative subgoal ("collect 8 logs",
+	//      "craft wooden pickaxe"). Beats manifesto L1+ because the
+	//      ladder needs operational direction, not just "you need food
+	//      → dispatch acquire-food forever".
+	//   3. manifesto L1+ — fallback when storyline has no concrete
+	//      pursue (e.g. armor levels with pursue=null).
+	//   4. curriculum plan — legacy fallback.
+	const manifestoEmergency = activeNeed?.need?.level === 0;
+	let skillId, skillSource;
+	if (manifestoEmergency) {
+		skillId = manifestoSkillId ?? storySkillId ?? plan.skillId;
+		skillSource = `manifesto:${activeNeed.need.id}`;
+	} else if (storySkillId) {
+		skillId = storySkillId;
+		skillSource = `storyline:${storyStep.step.id}`;
+	} else {
+		skillId = manifestoSkillId ?? plan.skillId;
+		skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
+	}
 
 	// v0.3.0 fast-advisor: if a fresh recommendation is sitting on ctx
 	// (the result of a previous tick's async advise() call), use it.
