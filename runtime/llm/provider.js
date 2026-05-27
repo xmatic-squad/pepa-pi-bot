@@ -24,7 +24,11 @@ const ENV = {
 };
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_TIMEOUT_MS = 8000;
+// 20s default — TimeWeb's hosted agent endpoint takes 5-15s for the
+// fast-advisor prompt (registry block + snapshot context). 8s was too
+// tight and produced spurious timeouts in smoke tests. OpenAI direct
+// returns much faster (<2s); the env var overrides if needed.
+const DEFAULT_TIMEOUT_MS = 20000;
 
 export function isAvailable() {
 	return !!process.env[ENV.API_KEY];
