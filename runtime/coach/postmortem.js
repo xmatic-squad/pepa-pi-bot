@@ -26,6 +26,7 @@ import {
 	poiNearby,
 	recordPOI,
 } from "../knowledge/index.js";
+import { isRegistered, skillRegistryPrompt } from "../skill-registry.js";
 import { info, warn } from "../log.js";
 
 const COACH_INTERVAL_MS = 5 * 60 * 1000;   // 5 min between coach passes
@@ -278,21 +279,37 @@ export async function drainOnce({ askPi, stateDir, force = false } = {}) {
 	}
 
 	let lessonsCount = 0;
+	let rejectedPreferCount = 0;
 	for (const item of asArray(parsed.lessons ?? parsed)) {
 		if (!item || !item.lesson) continue;
+		// Skill ids referenced by Pi must be in the live registry.
+		// Mode names (e.g. "night_shelter") are tolerated at write time and
+		// translated at consult time by advice.js#normalisePreferSkill.
+		let preferSkill = item.prefer_skill ?? null;
+		if (preferSkill && !isRegistered(preferSkill) && !isLikelyModeName(preferSkill)) {
+			rejectedPreferCount += 1;
+			preferSkill = null;
+		}
+		let avoidSkill = item.avoid_skill ?? null;
+		if (avoidSkill && !isRegistered(avoidSkill) && !isLikelyModeName(avoidSkill)) {
+			avoidSkill = null;
+		}
 		recordLesson({
 			text: item.lesson,
 			category: item.category ?? "survival",
 			triggerSkill: item.trigger_skill ?? null,
 			triggerHostile: item.trigger_hostile ?? null,
 			triggerSituation: item.trigger_situation ?? null,
-			avoidSkill: item.avoid_skill ?? null,
-			preferSkill: item.prefer_skill ?? null,
+			avoidSkill,
+			preferSkill,
 			confidence: clamp(Number(item.confidence) || 0.6, 0.1, 0.95),
 			source: "pi-coach",
 			sourceRef: item.source_ref ?? null,
 		});
 		lessonsCount += 1;
+	}
+	if (rejectedPreferCount > 0) {
+		warn("coach", `dropped prefer_skill from ${rejectedPreferCount} lessons (not in registry)`);
 	}
 
 	// Write one postmortem per death; if Pi grouped them, share the same lesson.
@@ -311,6 +328,17 @@ export async function drainOnce({ askPi, stateDir, force = false } = {}) {
 
 	info("coach", `drain: analysed ${pending.length} deaths → ${lessonsCount} lessons`);
 	return { ok: true, analysed: pending.length, lessons: lessonsCount };
+}
+
+// Mode names from runtime/modes.js (advice.js#MODE_TO_SKILL) — we accept
+// these at write time because advice.js maps them to real skills at consult.
+const KNOWN_MODE_NAMES = new Set([
+	"self_preservation", "night_shelter", "hunger", "shelter",
+	"flee", "sleep", "eat", "tunnel_out", "tunnel-out", "explore", "wander",
+]);
+function isLikelyModeName(s) {
+	if (!s || typeof s !== "string") return false;
+	return KNOWN_MODE_NAMES.has(s.toLowerCase().trim());
 }
 
 function buildPrompt(deaths) {
@@ -334,6 +362,8 @@ function buildPrompt(deaths) {
 		"The bot is trying to gather wood, craft tools, build a small village, and survive nights.",
 		"It's currently dying repeatedly. Your job: extract 1-3 short, generalised lessons it can apply on respawn.",
 		"",
+		skillRegistryPrompt({ limit: 1800 }),
+		"",
 		"DEATHS:",
 		summary,
 		"",
@@ -343,12 +373,13 @@ function buildPrompt(deaths) {
 		'    { "lesson": "...", "category": "combat|pathing|crafting|survival|social",',
 		'      "trigger_skill": "<skill id or null>",',
 		'      "trigger_hostile": "<mob name or null>",',
-		'      "avoid_skill": "<skill to NOT dispatch or null>",',
-		'      "prefer_skill": "<alternative skill or null>",',
+		'      "avoid_skill": "<registered skill id to NOT dispatch, or null>",',
+		'      "prefer_skill": "<registered skill id to use instead, or null>",',
 		'      "confidence": 0.7 }',
 		'  ] }',
 		"",
 		"Keep each lesson under 30 words. Be specific (e.g., \"attack creeper with fists\" rather than \"don't fight\").",
+		"CRITICAL: avoid_skill and prefer_skill MUST be one of the registered ids above, or null.",
 	].join("\n");
 }
 
@@ -390,4 +421,4 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
 
 // Test-only exports
-export const __testing = { captureDeath, buildPrompt, extractJson, inferCause };
+export const __testing = { captureDeath, buildPrompt, extractJson, inferCause, isLikelyModeName, KNOWN_MODE_NAMES };

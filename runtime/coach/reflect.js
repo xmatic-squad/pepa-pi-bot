@@ -16,7 +16,19 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { isAvailable as knowledgeAvailable, record as recordLesson } from "../knowledge/index.js";
+import { isRegistered, skillRegistryPrompt } from "../skill-registry.js";
 import { info, warn } from "../log.js";
+
+// Mode-name allow-list, mirrors postmortem.js (advice.js maps them to
+// real skills at consult-time). Anything else is hallucination → dropped.
+const KNOWN_MODE_NAMES = new Set([
+	"self_preservation", "night_shelter", "hunger", "shelter",
+	"flee", "sleep", "eat", "tunnel_out", "tunnel-out", "explore", "wander",
+]);
+function isLikelyModeName(s) {
+	if (!s || typeof s !== "string") return false;
+	return KNOWN_MODE_NAMES.has(s.toLowerCase().trim());
+}
 
 const DEFAULT_INTERVAL_MS = 30 * 60 * 1000;
 const HOURLY_BUDGET = 2;
@@ -78,19 +90,32 @@ export async function runOnce({ stateDir, askPi, getSnapshot, force = false } = 
 	}
 
 	const path = writeReflection(stateDir, parsed, reply);
+	let rejectedPrefer = 0;
 	for (const l of asArray(parsed.lessons)) {
 		if (!l?.lesson) continue;
+		let preferSkill = l.prefer_skill ?? null;
+		if (preferSkill && !isRegistered(preferSkill) && !isLikelyModeName(preferSkill)) {
+			rejectedPrefer += 1;
+			preferSkill = null;
+		}
+		let avoidSkill = l.avoid_skill ?? null;
+		if (avoidSkill && !isRegistered(avoidSkill) && !isLikelyModeName(avoidSkill)) {
+			avoidSkill = null;
+		}
 		recordLesson({
 			text: l.lesson,
 			category: l.category ?? "self-improve",
 			triggerSkill: l.trigger_skill ?? null,
 			triggerHostile: l.trigger_hostile ?? null,
-			avoidSkill: l.avoid_skill ?? null,
-			preferSkill: l.prefer_skill ?? null,
+			avoidSkill,
+			preferSkill,
 			confidence: clamp(Number(l.confidence) || 0.5, 0.1, 0.9),
 			source: "pi-reflect",
 			sourceRef: path,
 		});
+	}
+	if (rejectedPrefer > 0) {
+		warn("reflect", `dropped prefer_skill from ${rejectedPrefer} reflection lessons (not in registry)`);
 	}
 	info("reflect", `verdict=${parsed.verdict ?? "?"} ${parsed.summary?.slice(0, 80) ?? ""} (${path ?? "no file"})`);
 	return { ok: true, verdict: parsed.verdict, summary: parsed.summary, lessons: parsed.lessons ?? [] };
@@ -136,6 +161,8 @@ function buildPrompt({ snap, journal, scenarios, diary, plan }) {
 		"You are pepa, an autonomous Minecraft survival bot, reflecting on your own progress.",
 		"Look at the last ~30 minutes of activity below. Answer honestly: are you actually making progress, or stuck in a loop?",
 		"",
+		skillRegistryPrompt({ limit: 1800 }),
+		"",
 		"## Current state",
 		`- position: ${pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : "?"}`,
 		`- hp: ${snap?.health ?? "?"} food: ${snap?.food ?? "?"} day: ${snap?.isDay ? "yes" : "no"}`,
@@ -176,8 +203,8 @@ function buildPrompt({ snap, journal, scenarios, diary, plan }) {
 		'      "category": "combat|pathing|crafting|survival|self-improve",',
 		'      "trigger_skill": "<skill id or null>",',
 		'      "trigger_hostile": "<mob name or null>",',
-		'      "avoid_skill": "<skill to avoid or null>",',
-		'      "prefer_skill": "<alternative skill id or null>",',
+		'      "avoid_skill": "<registered skill id to avoid or null>",',
+		'      "prefer_skill": "<registered skill id to use instead or null>",',
 		'      "confidence": 0.6 }',
 		'  ]',
 		'}',
@@ -185,6 +212,7 @@ function buildPrompt({ snap, journal, scenarios, diary, plan }) {
 		"If you're clearly in a loop (same activity, no inventory growth, same position), say so honestly.",
 		"If you're stuck in a bad terrain (deep pit, hostile-rich area), recommend choosing a new base.",
 		"Lessons should be SHORT and ACTIONABLE. Don't repeat lessons the dispatcher already learned.",
+		"CRITICAL: avoid_skill and prefer_skill MUST be one of the registered ids listed at the top of this prompt, or null. Do NOT invent new ids.",
 	].join("\n");
 }
 

@@ -10,7 +10,8 @@
 // recall → behavioural change. Without this, the DB is just a log.
 
 import { isAvailable as knowledgeAvailable, topAdvice, markApplied } from "../knowledge/index.js";
-import { info } from "../log.js";
+import { isRegistered } from "../skill-registry.js";
+import { info, warn } from "../log.js";
 
 // Skills we will not blindly swap into — they require their own
 // preconditions (e.g. survive.flee needs a known threat direction).
@@ -47,15 +48,19 @@ const MODE_TO_SKILL = Object.freeze({
 });
 
 function normalisePreferSkill(raw) {
-	if (!raw || typeof raw !== "string") return raw;
-	if (SAFE_OVERRIDES.has(raw)) return raw;
+	if (!raw || typeof raw !== "string") return null;
+	if (SAFE_OVERRIDES.has(raw) && isRegistered(raw)) return raw;
 	const lower = raw.toLowerCase().trim();
 	if (MODE_TO_SKILL[lower]) return MODE_TO_SKILL[lower];
 	// Pi sometimes writes "survive_flee" or "survive flee"; normalise.
 	const dot = lower.replace(/[_\s]+/g, ".");
-	if (SAFE_OVERRIDES.has(dot)) return dot;
+	if (SAFE_OVERRIDES.has(dot) && isRegistered(dot)) return dot;
 	if (MODE_TO_SKILL[dot]) return MODE_TO_SKILL[dot];
-	return raw;
+	// Anything else (Pi hallucinated names like "relocate.surface",
+	// "choose.safe.surface", "survive.shelter", "gather.visible_log") —
+	// hard reject. We'd rather fall through to 'avoid' / 'proceed' than
+	// dispatch a nonexistent skill.
+	return null;
 }
 
 /**
@@ -81,7 +86,7 @@ export function consult({ plannedSkillId, snapshot } = {}) {
 	// avoid_skill matches?
 	if (advice.avoid && advice.avoid === plannedSkillId) {
 		const normalisedPrefer = normalisePreferSkill(advice.prefer);
-		if (normalisedPrefer && SAFE_OVERRIDES.has(normalisedPrefer)) {
+		if (normalisedPrefer && SAFE_OVERRIDES.has(normalisedPrefer) && isRegistered(normalisedPrefer)) {
 			if (normalisedPrefer !== advice.prefer) {
 				info("coach", `advice: normalised prefer "${advice.prefer}" → "${normalisedPrefer}"`);
 			}
@@ -92,6 +97,9 @@ export function consult({ plannedSkillId, snapshot } = {}) {
 				lessonId: advice.lessonId,
 				lesson: advice.lesson,
 			};
+		}
+		if (advice.prefer && !normalisedPrefer) {
+			warn("coach", `advice: rejected hallucinated prefer_skill "${advice.prefer}" (lesson #${advice.lessonId})`);
 		}
 		info("coach", `advice: avoid ${plannedSkillId} (lesson #${advice.lessonId})`);
 		return { action: "avoid", lessonId: advice.lessonId, lesson: advice.lesson };
