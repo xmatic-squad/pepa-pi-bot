@@ -24,6 +24,7 @@ import {
 	unanalysedDeaths,
 	record as recordLesson,
 	poiNearby,
+	recordPOI,
 } from "../knowledge/index.js";
 import { info, warn } from "../log.js";
 
@@ -57,6 +58,18 @@ export function attach(bot, ctx = {}) {
 			if (!death) return;
 			const deathId = insertDeath(death);
 			info("coach", `death recorded id=${deathId ?? "-"} cause=${death.cause} hostile=${death.hostile ?? "?"} skill=${death.lastSkill ?? "?"}`);
+			// v0.2.0-rc.3 — mark this spot as a danger POI so spatial recall
+			// surfaces it next time the bot comes near. Expires after 6 hours
+			// so the danger doesn't outlive its relevance.
+			if (typeof death.x === "number" && typeof death.z === "number") {
+				recordPOI({
+					kind: "danger",
+					name: death.hostile ?? death.cause ?? "death",
+					x: death.x, y: death.y ?? 64, z: death.z,
+					expiresAt: Date.now() + 6 * 3600_000,
+					notes: `death id=${deathId} cause=${death.cause}`,
+				});
+			}
 		} catch (e) {
 			warn("coach", `captureDeath failed: ${e?.message ?? e}`);
 		}

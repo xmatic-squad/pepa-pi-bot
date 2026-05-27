@@ -370,6 +370,52 @@ function metricRecoverySkill(ctx, plannedSkillId) {
 	return null;
 }
 
+// v0.2.0-rc.3 — wedged-emergency escape. When the bot has not made
+// meaningful horizontal progress for ≥ 60s AND there's no immediate
+// hostile (defendReflex would have handled it) AND a placeable block
+// is in inventory, dispatch survive.pillar-up to climb vertically out
+// of pit terrain. Breaks the tunnel-out-fail-fall-back-to-flee loop
+// observed live in the rc.2 deploy. noProgressReason is a hint, not
+// required — pillar-up only writes blocks underneath, so even if the
+// real cause is something else, the worst case is +1 dirt placed.
+const WEDGED_MIN_MS = 60_000;
+
+function wedgedEscapeSkill(ctx) {
+	const s = ctx.snapshot;
+	if (!s) return null;
+	if (s.closestHostile && (s.closestHostile.distance ?? Infinity) < 6) return null;
+	const lastMove = ctx.lastSignificantMoveAt ?? 0;
+	if (!lastMove) return null; // need at least one tick of position tracking
+	if (Date.now() - lastMove < WEDGED_MIN_MS) return null;
+	// Last attempted escape was recent? give it room.
+	if (ctx.skillBackoff?.["survive.pillar-up"] && Date.now() < ctx.skillBackoff["survive.pillar-up"]) {
+		return null;
+	}
+	const pillar = getSkill("survive.pillar-up");
+	if (!pillar) return null;
+	const pre = pillar.preconditions(ctx);
+	if (!pre.ok) return null;
+	return "survive.pillar-up";
+}
+
+function trackSignificantMovement(ctx) {
+	const s = ctx.snapshot;
+	const pos = s?.position;
+	if (!pos) return;
+	const last = ctx.lastSignificantPos;
+	if (!last) {
+		ctx.lastSignificantPos = { x: pos.x, z: pos.z };
+		ctx.lastSignificantMoveAt = Date.now();
+		return;
+	}
+	const dx = pos.x - last.x;
+	const dz = pos.z - last.z;
+	if (dx * dx + dz * dz >= 16) {
+		ctx.lastSignificantPos = { x: pos.x, z: pos.z };
+		ctx.lastSignificantMoveAt = Date.now();
+	}
+}
+
 function curriculumReflex(ctx) {
 	const s = ctx.snapshot;
 	if (!s.connected) return { action: "noop" };
@@ -377,6 +423,17 @@ function curriculumReflex(ctx) {
 
 	const since = Date.now() - (ctx.lastCurriculumAt ?? 0);
 	if (since < CURRICULUM_COOLDOWN_MS) return { action: "noop" };
+
+	trackSignificantMovement(ctx);
+	const wedged = wedgedEscapeSkill(ctx);
+	if (wedged) {
+		ctx.lastCurriculumAt = Date.now();
+		ctx.skillBackoff = ctx.skillBackoff ?? {};
+		// Don't pillar-up every tick — cool off for 2 min after each attempt.
+		ctx.skillBackoff["survive.pillar-up"] = Date.now() + 2 * 60_000;
+		ctx.dispatch(() => runSkill(wedged, ctx), wedged, {});
+		return { action: "dispatched", kind: "curriculum-wedged-escape", label: wedged };
+	}
 
 	const plan = s.curriculum?.plan;
 	const wanderHintUntil = ctx.skillBackoff?.["__wander_hint__"] ?? 0;
@@ -421,7 +478,32 @@ function curriculumReflex(ctx) {
 	// explore.far so the bot actually leaves the patch it's stuck in.
 	if (!plan?.skillId || wantWander) {
 		ctx.lastCurriculumAt = Date.now();
-		if (wantWander && consecutiveWanderHints >= 1) {
+		const fallbackId = wantWander && consecutiveWanderHints >= 1 ? "explore.far" : "wander";
+		// v0.2.0-rc.3 — consult advice on the FALLBACK dispatch too. Without
+		// this, Pi-coach lessons like "do not explore.far after a zombie
+		// sighting" never fire (the bot keeps falling into the fallback path
+		// after each curriculum skill bails on no_target / wander_hint).
+		const fbAdvice = consultAdvice({ plannedSkillId: fallbackId === "wander" ? "explore.far" : fallbackId, snapshot: ctx.snapshot });
+		if (fbAdvice.action === "override" && fbAdvice.overrideSkillId) {
+			ctx.dispatch(() => runSkill(fbAdvice.overrideSkillId, ctx), fbAdvice.overrideSkillId, {
+				onComplete: (res) => reportAdviceOutcome({ lessonId: fbAdvice.lessonId, succeeded: !!res?.ok }),
+			});
+			return { action: "dispatched", kind: "curriculum-fallback-advice-override", label: fbAdvice.overrideSkillId, lessonId: fbAdvice.lessonId };
+		}
+		if (fbAdvice.action === "avoid") {
+			// Lesson says don't do the fallback either. Try pillar-up as a
+			// constructive last resort if we have a placeable block — otherwise
+			// just idle for a tick so the next loop can re-evaluate.
+			const pillarSkill = getSkill("survive.pillar-up");
+			if (pillarSkill && pillarSkill.preconditions(ctx).ok) {
+				ctx.dispatch(() => runSkill("survive.pillar-up", ctx), "survive.pillar-up", {
+					onComplete: (res) => reportAdviceOutcome({ lessonId: fbAdvice.lessonId, succeeded: !!res?.ok }),
+				});
+				return { action: "dispatched", kind: "curriculum-fallback-pillar-up", label: "survive.pillar-up", lessonId: fbAdvice.lessonId };
+			}
+			return { action: "noop", kind: "curriculum-fallback-advice-avoid", label: fallbackId, lessonId: fbAdvice.lessonId };
+		}
+		if (fallbackId === "explore.far") {
 			ctx.dispatch(() => runSkill("explore.far", ctx), "explore.far", {});
 			return { action: "dispatched", kind: "curriculum-explore-far", label: "explore.far" };
 		}
