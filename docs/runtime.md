@@ -96,6 +96,9 @@ TUI; the bot is unaffected.
 | `r` | Force-broadcast a status snapshot now. |
 | `c` | Enter **chat mode** — type a message, Enter sends it into MC chat. |
 | `a` | Enter **ask-Pi mode** — type a prompt, Enter spawns `pi -p` and streams output into the Pi panel. |
+| `k` | Enter **run-skill mode** — type `skill.id` plus optional JSON args; dispatches once through `cmd:run-skill`. |
+| `v` | Capture a headless viewer screenshot into `state/<host>/screenshots/` when viewer support is available. |
+| `!` | Force a stuck incident proposal through the critic/auto-improve path for diagnostics. |
 | `y` | Open the latest pending proposal. In the proposal panel: `y` approves, `n`/Esc closes. |
 | `q` | Quit TUI only. Bot keeps running. |
 
@@ -106,19 +109,20 @@ TUI; the bot is unaffected.
 The chain (highest priority first), wired and dispatching real
 Mineflayer actions:
 
-1. **`defendReflex`** — closest hostile within 4 m → `attackNearest`
-   (equips best melee). Within 12 m + low HP or ≥3 hostiles → `fleeFrom`
-   along the away-vector.
-2. **`eatReflex`** — food < 16 → `eatBestFood` (picks from
-   FOOD_PRIORITY list, equip + consume). 5 s cooldown.
-3. **`sleepReflex`** — night + no hostile within 8 m → `sleepInBed`
-   (finds nearest placed bed within 16 blocks, paths there, sleeps).
-   5 min cooldown on failures.
-4. **`techTreeReflex`** — deterministic crafting progression
-   (planks → sticks → wooden axe → pickaxe → sword) when prerequisites
-   are in inventory.
-5. **`autonomousReflex`** — when nothing reactive fires: chop trees until
-   ~16 logs, then wander to discover new chunks.
+1. **Modes** — Mindcraft-style interrupts run first:
+   `self_preservation`, `hunger`, `night_shelter`. They dispatch
+   registered skills (`survive.flee`, `survive.eat`, `survive.sleep`)
+   and therefore feed metrics, scenario memory and current-task state.
+2. **`defendReflex`** — closest hostile within 4 m → `attackNearest`
+   (equips best melee). Low HP / close hostile → flee.
+3. **`eatReflex`** — food < 16 and edible item is carried →
+   `eatBestFood`. No-food states fall through to the curriculum instead
+   of eat-spamming.
+4. **`sleepReflex`** — night + no hostile within 8 m + bed available →
+   `sleepInBed`. Impossible states are skipped before dispatch.
+5. **`curriculumReflex`** — dispatches `snapshot.curriculum.plan.skillId`
+   through `runSkill`. Inventory pressure can insert
+   `village.deposit-surplus` before continuing.
 6. **`idleReflex`** — every 20th tick, log heartbeat (HP / food / pos).
 
 There is **no operator-goal reflex anymore.** MC chat does not create
@@ -199,10 +203,14 @@ from `bot.registry`, so a version-sensitive item that doesn't exist on
 the connected server simply doesn't appear in the set and skills
 return `code: "unsupported_version"` instead of crashing.
 
-Reference skills shipped today: `gather.logs`, `survive.eat`,
-`explore.wander`. The reflex loop still calls the older
-`runtime/actions.js` primitives directly — porting more behaviours to
-skills lands in later phases.
+Reference skills shipped today include `gather.logs`, `gather.stone`,
+`gather.wool`, `survive.eat`, `survive.flee`, `survive.sleep`,
+`survive.acquire-food`, `explore.wander`, `explore.far`,
+`village.choose-base`, `village.place-chest`,
+`village.deposit-surplus`, `village.build-shelter`, `farm.wheat`, and
+the `craft.*` progression. Some low-level action primitives still live
+in `runtime/actions.js`, but they are increasingly called behind skill
+contracts so metrics and self-improvement see them.
 
 Run the contract + groups + curriculum tests:
 
@@ -216,7 +224,8 @@ npm test
 
 ```
 wood.16 → wood.planks-and-sticks → wood.tools →
-stone.32 → stone.tools → food.basic → storage.chest → shelter.torch
+survive.bed → stone.32 → stone.tools → food.basic →
+storage.chest → shelter.torch → village.base-site → village.shelter
 ```
 
 Each milestone has an `isDone(inventory, snapshot)` predicate and a
@@ -229,14 +238,13 @@ planks).
 The current curriculum result is on every snapshot as
 `snapshot.curriculum = { milestone, plan, inventoryFull }` so the TUI
 can show what the bot is working on and which skill should drive it.
-Wiring the scheduler to actually call `runSkill(plan.skillId, …)` in
-the reflex loop is a Phase 4 task; today the reflex still uses
-`actions.js` directly.
+The scheduler now calls `runSkill(plan.skillId, …)` directly from
+`curriculumReflex`; no LLM is in the hot path.
 
 Inventory pressure: `isInventoryFull(snapshot)` is exposed on every
-curriculum result; the TUI surfaces `[inventory full]` next to the
-milestone label so the operator can see when a deposit step is needed
-before progress continues.
+curriculum result; the TUI surfaces `[inventory full]`, and when a
+known/nearby chest exists the scheduler tries `village.deposit-surplus`
+before the next milestone.
 
 ### Optional: prismarine-viewer
 
@@ -259,10 +267,15 @@ Two persistent stores under `state/<host>/`:
   Pruned at 6 h age + 10k line ceiling. `leanestQuadrant({x, z})`
   returns the cardinal quadrant the bot has explored LEAST — used by
   `explore.far` to circle rather than retread the same patch.
+- **`skill-metrics.json`** — persistent per-skill ok/fail counters,
+  last code and duration. `snapshot.skillMetrics` exposes the loaded
+  totals so proposals learn from previous runs, not only the current
+  process lifetime.
 - **`scenarios.jsonl`** — sliding window of `(skillId, situationHash,
   code, ok, detail, ts)` tuples. `situationHash` is a coarse fingerprint
   of where + how the bot was (16-cell + 8y bucket, day/night, food
-  bucket, hp bucket, inventory key set, closest hostile name). The
+  bucket, hp bucket, biome, nearby block groups, inventory key set,
+  closest hostile name). The
   curriculum reflex calls `memory.shouldSkip({skillId, situation})` —
   ≥3 failures of the same `(skill, situation)` within 30 min and the
   reflex auto-converts into a wander hint instead of re-dispatching the
@@ -276,6 +289,7 @@ based on what's actually been tried, not just one snapshot.
 ### Scheduler driven by the curriculum (2026-05-26)
 
 The reflex chain is now: `defend → eat → sleep → curriculum → idle`.
+Modes run before that chain and dispatch their own skills immediately.
 
 `curriculumReflex` reads `snapshot.curriculum.plan.skillId` (populated
 by `runtime/curriculum.js` each tick) and dispatches it via
@@ -286,7 +300,8 @@ by `runtime/curriculum.js` each tick) and dispatches it via
   `gather.logs` returns `code: "no_target"` because there's no tree
   within 32m), the curriculum reflex swaps to `wander` for ~60 s.
 - If the result code is `missing_tool` / `missing_material` /
-  `no_target` / `no_food_source` / `unsupported_version`, that
+  `no_target` / `no_food_source` / `unsupported_version` / storage
+  blockers, that
   specific skill backs off for 60 s instead of retrying every tick.
 - Unknown `skillId` (curriculum suggested something that isn't
   registered yet) falls through to `wander` — useful while we wire
@@ -360,13 +375,16 @@ Two classes of proposals now land in `state/<host>/proposals/`:
 
 Both kinds now persist an **`editScope`** in their frontmatter — an
 array of repo-relative path prefixes the auto-patcher is allowed to
-modify. `state-store.readProposalEditScope(filename)` reads it back;
-hooking `scripts/auto-patch.js` to refuse cherry-picks that touch
-other areas is the remaining follow-up.
+modify. `scripts/auto-patch.js` enforces that scope, runs the cheap
+`scripts/lint-patch.js` gate, then runs `npm test` before cherry-pick.
 
-Per-skill metrics live in memory only (best-effort) but are surfaced
-on `snapshot.skillMetrics = { [skillId]: { ok, fail, lastTs } }` so
-the TUI can show which skills are reliable and which keep failing.
+Learning speed is configurable:
+
+- `PEPA_LEARNING_MODE=fast` or `dev` lowers stuck detection and
+  auto-improve cooldowns for active training sessions.
+- `PEPA_STUCK_THRESHOLD_SECONDS`, `PEPA_STUCK_COOLDOWN_SECONDS`,
+  `PEPA_AUTO_IMPROVE_COOLDOWN_SECONDS`,
+  `PEPA_AUTO_IMPROVE_MAX_PER_HOUR` override those defaults directly.
 
 ### Social layer (Phase 5)
 
@@ -442,6 +460,9 @@ shutdown). Framing: one JSON object per line.
 | `cmd:chat` | `{ text }` | Sends text into MC chat (rate-limited). |
 | `cmd:ask-pi` | `{ prompt }` | Spawns `pi -p "<prompt>"`. |
 | `cmd:snapshot` | `{}` | Force a `status` event now. |
+| `cmd:run-skill` | `{ skillId, args? }` | Pauses the reflex loop long enough to dispatch one registered skill. |
+| `cmd:screenshot` | `{ reason?, frames? }` | Captures a headless viewer screenshot for visual debugging. |
+| `cmd:force-incident` | `{ kind?, reason? }` | Forces a critic-backed proposal, useful for testing self-improvement. |
 
 The protocol is intentionally tiny — anyone can write a second client
 (a Telegram bridge, a web UI, a one-shot CLI) by reading
@@ -470,7 +491,8 @@ if they break things. The flow:
      - moves proposal pending → approved/ (audit trail)
      - creates branch auto/<slug> off main
      - runs `pi -p "<patch prompt>"` with 10-min timeout
-     - if Pi committed AND only touched runtime/ → cherry-pick onto main
+     - if Pi committed AND changed only the proposal editScope
+       (+ runtime/**/*.test.js) AND lint/npm-test pass → cherry-pick onto main
      - else → discard branch, exit non-zero
 6. supervisor's runtime/*.js watcher fires the moment the cherry-pick
    lands → child restarts on the new code
@@ -483,8 +505,10 @@ if they break things. The flow:
 ### Rate limits
 
 - **Proposal cooldown**: 30 min between proposal files of any kind.
-- **Auto-improve cooldown**: 15 min between finished `auto-patch.js` runs.
-- **Hourly cap**: max 4 auto-patches per hour, even if cooldown allows.
+- **Auto-improve cooldown**: default 15 min between finished
+  `auto-patch.js` runs; `PEPA_LEARNING_MODE=fast|dev` lowers this to
+  5 min unless overridden.
+- **Hourly cap**: default max 4 auto-patches per hour; fast/dev default is 8.
 - **Rollback cap**: 3 rollbacks per supervisor lifetime; after that the
   supervisor exits and waits for human review.
 

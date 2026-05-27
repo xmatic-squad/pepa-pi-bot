@@ -23,7 +23,7 @@ export const skill = Object.freeze({
 		return { ok: true };
 	},
 	async execute(ctx) {
-		const result = scoreCurrentPosition(ctx.bot);
+		const result = scoreCurrentPosition(ctx.bot, { isOwned: ctx.owned?.isOwned });
 		if (!result?.position) {
 			return { ok: false, code: "no_position", detail: "bot has no position", worldDelta: null };
 		}

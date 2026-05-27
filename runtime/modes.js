@@ -81,15 +81,23 @@ registerMode({
 		const snap = ctx?.snapshot;
 		if (!snap) return null;
 		const hp = snap.health ?? 20;
-		const food = snap.food ?? 20;
+		const hasFood = !!snap.hasFood;
+		if (ctx.modeCooldown?.self_preservation && Date.now() < ctx.modeCooldown.self_preservation) return null;
 		// HP critically low + we have food → eat NOW
-		if (hp < 6 && food > 0 && snap.hasFood) {
-			return { action: { skillId: "eat" }, detail: { reason: "hp<6", hp } };
+		if (hp < 6 && hasFood) {
+			ctx.modeCooldown = ctx.modeCooldown ?? {};
+			ctx.modeCooldown.self_preservation = Date.now() + 5_000;
+			return { action: { skillId: "survive.eat" }, detail: { reason: "hp<6", hp } };
 		}
 		// Hostile within reach and HP low → flee
 		const ch = snap.closestHostile;
 		if (ch && typeof ch.distance === "number" && ch.distance < 6 && hp < 10) {
-			return { action: { skillId: "explore.far" }, detail: { reason: "hp<10 near-hostile", hp, dist: ch.distance } };
+			ctx.modeCooldown = ctx.modeCooldown ?? {};
+			ctx.modeCooldown.self_preservation = Date.now() + 8_000;
+			return {
+				action: { skillId: "survive.flee", args: { hostileName: ch.name } },
+				detail: { reason: "hp<10 near-hostile", hp, dist: ch.distance },
+			};
 		}
 		return null;
 	},
@@ -102,8 +110,11 @@ registerMode({
 	update(ctx) {
 		const snap = ctx?.snapshot;
 		if (!snap) return null;
+		if (ctx.modeCooldown?.hunger && Date.now() < ctx.modeCooldown.hunger) return null;
 		if ((snap.food ?? 20) < 14 && snap.hasFood) {
-			return { action: { skillId: "eat" }, detail: { reason: "food<14", food: snap.food } };
+			ctx.modeCooldown = ctx.modeCooldown ?? {};
+			ctx.modeCooldown.hunger = Date.now() + 5_000;
+			return { action: { skillId: "survive.eat" }, detail: { reason: "food<14", food: snap.food } };
 		}
 		return null;
 	},
@@ -116,11 +127,14 @@ registerMode({
 	update(ctx) {
 		const snap = ctx?.snapshot;
 		if (!snap) return null;
+		if (ctx.modeCooldown?.night_shelter && Date.now() < ctx.modeCooldown.night_shelter) return null;
 		// Only at night and only if we actually carry / can place a bed
 		if (snap.isDay) return null;
 		const inv = snap.inventory || {};
 		const hasBed = Object.keys(inv).some((n) => /_bed$/.test(n));
 		if (!hasBed) return null;
-		return { action: { skillId: "sleep" }, detail: { reason: "night with bed in hand" } };
+		ctx.modeCooldown = ctx.modeCooldown ?? {};
+		ctx.modeCooldown.night_shelter = Date.now() + 30_000;
+		return { action: { skillId: "survive.sleep" }, detail: { reason: "night with bed in hand" } };
 	},
 });

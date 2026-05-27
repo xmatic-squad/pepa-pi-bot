@@ -74,7 +74,7 @@ test("cooldown prevents back-to-back firings", () => {
 });
 
 test("skill metrics record ok/fail and expose snapshot", () => {
-	const m = createSkillMetrics();
+	const m = createSkillMetrics({ persist: false });
 	m.record("gather.logs", true);
 	m.record("gather.logs", true);
 	m.record("gather.logs", false);

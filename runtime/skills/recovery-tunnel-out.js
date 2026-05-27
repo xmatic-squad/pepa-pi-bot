@@ -280,7 +280,8 @@ export function rankTunnelDirections(bot, maxSteps = 3) {
 
 async function digOne(bot, block) {
 	if (isPassableBlock(block)) return false;
-	await equipLikelyTool(bot, block.name);
+	const tool = await equipLikelyTool(bot, block.name);
+	const timeoutMs = digTimeoutMs(block.name, tool);
 	try {
 		if (typeof bot.lookAt === "function") {
 			await withTimeout(bot.lookAt(centerOf(block.position), true), 1_500, `lookAt(${block.name})`);
@@ -288,12 +289,22 @@ async function digOne(bot, block) {
 	} catch {
 		// Dig may still work; do not abort on look jitter.
 	}
-	await withTimeout(bot.dig(block), 10_000, `dig(${block.name})`);
+	await withTimeout(bot.dig(block), timeoutMs, `dig(${block.name})`);
 	const after = bot.blockAt(block.position);
 	if (after && !isPassableBlock(after) && after.name === block.name) {
 		throw new Error(`block still present after dig: ${block.name}`);
 	}
 	return true;
+}
+
+function digTimeoutMs(blockName, equippedTool) {
+	const kind = toolKindFor(blockName);
+	if (!kind) return 12_000;
+	if (equippedTool?.includes(kind)) return 12_000;
+	if (kind === "pickaxe") return 25_000;
+	if (kind === "axe") return 18_000;
+	if (kind === "shovel") return 15_000;
+	return 12_000;
 }
 
 async function pushForward(bot, yaw, ms) {
@@ -329,8 +340,16 @@ export async function digEscapeTunnel(bot, { maxSteps = 3, minMove = 0.75, pushM
 		const before = posClone(bot.entity.position);
 		info("action", `tunnel-out: ${reason} → ${dir.name} (${dir.digTargets.length} blocks to clear)`);
 		try {
-			for (const target of dir.digTargets) {
-				await digOne(bot, target.block);
+			let dug = 0;
+			let lastStep = 0;
+			const byStep = [...dir.digTargets]
+				.sort((a, b) => (a.step - b.step) || (a.kind === "feet" ? -1 : 1));
+			for (const target of byStep) {
+				if (target.step !== lastStep && lastStep > 0) {
+					await pushForward(bot, dir.yaw, Math.min(pushMs, 900));
+				}
+				lastStep = target.step;
+				if (await digOne(bot, target.block)) dug++;
 			}
 			await pushForward(bot, dir.yaw, pushMs);
 			const moved = horizontalDistance(before, bot.entity.position);
@@ -340,7 +359,7 @@ export async function digEscapeTunnel(bot, { maxSteps = 3, minMove = 0.75, pushM
 				return {
 					ok: true,
 					code: "done",
-					detail: { mode: "tunnel-out", dir: dir.name, moved, movedY, dug: dir.digTargets.length },
+					detail: { mode: "tunnel-out", dir: dir.name, moved, movedY, dug },
 					worldDelta: { mode: "tunnel-out", movedTo },
 				};
 			}
@@ -363,7 +382,7 @@ export async function digEscapeTunnel(bot, { maxSteps = 3, minMove = 0.75, pushM
 export const skill = Object.freeze({
 	id: "recovery.tunnel-out",
 	title: "Tunnel out of a wedged 1x1 hole",
-	timeoutMs: 45_000,
+	timeoutMs: 120_000,
 	preconditions(ctx) {
 		if (!ctx?.bot) return { ok: false, code: "no_bot", detail: "bot missing" };
 		return { ok: true };

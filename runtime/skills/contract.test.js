@@ -37,6 +37,17 @@ test("preconditions gate execution", async () => {
 	}
 });
 
+test("gather.logs precondition refuses nearby hostiles", async () => {
+	const bot = { registry: { blocksByName: { oak_log: { id: 1 } } } };
+	const res = await runSkill("gather.logs", {
+		bot,
+		snapshot: { closestHostile: { name: "drowned", distance: 6.1 } },
+	});
+	assert.equal(res.ok, false);
+	assert.equal(res.code, "no_target");
+	assert.match(res.detail, /unsafe to gather logs: drowned 6\.1 blocks away/);
+});
+
 test("preconditions that throw produce precondition_failed", async () => {
 	const teardown = _registerForTest({
 		id: "test.precondition-throw",

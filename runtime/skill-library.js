@@ -42,11 +42,14 @@ function extractHeaderComment(src) {
 
 function skillFilePath(id) {
 	const slug = id.replace(/\./g, "-");
+	const tail = id.split(".").slice(1).join("-");
 	const candidates = [
 		path.join(__dirname, "skills", `${slug}.js`),
 		path.join(__dirname, "skills", `${slug.replace(/-/g, "_")}.js`),
+		tail ? path.join(__dirname, "skills", `${tail}.js`) : null,
+		tail ? path.join(__dirname, "skills", `${tail.replace(/-/g, "_")}.js`) : null,
 	];
-	for (const p of candidates) if (fs.existsSync(p)) return p;
+	for (const p of candidates) if (p && fs.existsSync(p)) return p;
 	return null;
 }
 

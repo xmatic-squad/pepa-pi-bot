@@ -18,9 +18,16 @@ function opt(name, fallback = "") {
 	return process.env[name]?.trim() || fallback;
 }
 
+function optInt(name, fallback) {
+	const raw = Number.parseInt(opt(name, String(fallback)), 10);
+	return Number.isFinite(raw) ? raw : fallback;
+}
+
 const host = req("MC_HOST");
 const port = Number.parseInt(opt("MC_PORT", "25565"), 10);
 const username = req("MC_USERNAME");
+const learningMode = opt("PEPA_LEARNING_MODE", "normal").toLowerCase();
+const fastLearning = learningMode === "fast" || learningMode === "dev";
 
 // MC_VERSION: "auto" (or empty) lets mineflayer auto-detect from the server
 // handshake — the right default per the survival-bot PRD (no hard-coded modern
@@ -44,6 +51,11 @@ export const config = Object.freeze({
 		.filter(Boolean),
 	tickIntervalMs: Math.max(1, Number.parseInt(opt("TICK_INTERVAL_SECONDS", "3"), 10)) * 1000,
 	chatRateLimitPerMin: Number.parseInt(opt("CHAT_RATE_LIMIT_PER_MIN", "15"), 10),
+	learningMode,
+	stuckThresholdMs: Math.max(15, optInt("PEPA_STUCK_THRESHOLD_SECONDS", fastLearning ? 60 : 300)) * 1000,
+	stuckCooldownMs: Math.max(60, optInt("PEPA_STUCK_COOLDOWN_SECONDS", fastLearning ? 600 : 1800)) * 1000,
+	autoImproveCooldownMs: Math.max(60, optInt("PEPA_AUTO_IMPROVE_COOLDOWN_SECONDS", fastLearning ? 300 : 900)) * 1000,
+	autoImproveMaxPerHour: Math.max(1, optInt("PEPA_AUTO_IMPROVE_MAX_PER_HOUR", fastLearning ? 8 : 4)),
 	// Optional prismarine-viewer port for local visual debugging. 0/empty = off.
 	viewerPort: (() => {
 		const v = Number.parseInt(opt("VIEWER_PORT", "0"), 10);

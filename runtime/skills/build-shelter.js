@@ -121,6 +121,7 @@ export const skill = Object.freeze({
 	},
 	async execute(ctx, { owned } = {}) {
 		const bot = ctx.bot;
+		const ownedLedger = owned ?? ctx.owned;
 		const planks = pickBuildPlanks(bot);
 		const base = getLocation("base") ?? getLocation(SHELTER_NAME);
 		const center = { x: base.x, y: base.y, z: base.z };
@@ -158,8 +159,8 @@ export const skill = Object.freeze({
 			}
 			try {
 				await withTimeout(bot.placeBlock(place.ref, place.face), 5000, "placeBlock");
-				if (owned?.markPlaced) {
-					owned.markPlaced({
+				if (ownedLedger?.markPlaced) {
+					ownedLedger.markPlaced({
 						x: target.x, y: target.y, z: target.z,
 						blockType: planks.name,
 						skill: "village.build-shelter",

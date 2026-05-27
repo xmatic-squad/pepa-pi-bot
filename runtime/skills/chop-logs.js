@@ -25,6 +25,14 @@ function withTimeout(promise, ms, label) {
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+const UNSAFE_HOSTILE_DISTANCE = 8;
+function nearbyUnsafeHostile(snapshot) {
+	const hostile = snapshot?.closestHostile;
+	const distance = Number(hostile?.distance);
+	if (!Number.isFinite(distance) || distance > UNSAFE_HOSTILE_DISTANCE) return null;
+	return { name: hostile?.name ?? "hostile", distance };
+}
+
 export const skill = Object.freeze({
 	id: "gather.logs",
 	title: "Gather logs",
@@ -34,6 +42,17 @@ export const skill = Object.freeze({
 	timeoutMs: 90_000,
 	preconditions(ctx) {
 		if (!ctx?.bot) return { ok: false, code: "no_bot", detail: "bot missing" };
+		const unsafeHostile = nearbyUnsafeHostile(ctx.snapshot);
+		if (unsafeHostile) {
+			// When defend/flee is cooling down, don't let collectBlock spend its
+			// whole 60s timeout chopping beside a mob. no_target reuses the
+			// scheduler's existing short backoff for gather skills.
+			return {
+				ok: false,
+				code: "no_target",
+				detail: `unsafe to gather logs: ${unsafeHostile.name} ${unsafeHostile.distance.toFixed(1)} blocks away`,
+			};
+		}
 		const known = logBlocks(ctx.bot);
 		if (known.size === 0) {
 			return { ok: false, code: "unsupported_version", detail: "no log blocks in registry" };

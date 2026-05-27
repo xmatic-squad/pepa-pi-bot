@@ -157,13 +157,16 @@ const MILESTONES = [
 			);
 			return carrying || (snap?.food ?? 20) >= 18;
 		},
-		suggest: () => ({ skillId: "survive.eat" }), // best-effort; richer "find food" skill lands later
+		suggest: () => ({ skillId: "survive.acquire-food" }),
 	},
 	{
 		id: "storage.chest",
 		title: "Place a personal chest",
-		isDone: (inv) => has(inv, "chest"),
-		suggest: () => ({ skillId: "craft.chest" }),
+		isDone: (_inv, snap) => !!snap?.locations?.chest,
+		suggest: (inv) => {
+			if (!has(inv, "chest")) return { skillId: "craft.chest" };
+			return { skillId: "village.place-chest" };
+		},
 	},
 	{
 		id: "shelter.torch",

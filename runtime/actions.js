@@ -67,6 +67,10 @@ function forceStopCollectBlock(bot) {
 	try { bot.pathfinder?.stop?.(); } catch {}
 }
 
+function clearPathfinderGoal(bot) {
+	try { bot.pathfinder?.setGoal?.(null); } catch {}
+}
+
 // Each action that uses pathfinder should set its own Movements profile
 // before calling goto — otherwise it inherits whatever the previous caller
 // left set, which has caused live regressions (e.g. flee setting canDig=false,
@@ -476,6 +480,7 @@ export async function wander(bot, radius = 12) {
 		return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, via: best.name } };
 	} catch (e) {
 		warn("action", `wander pathfinder failed: ${e.message} — continuing blind in ${best.name}`);
+		clearPathfinderGoal(bot);
 		const beforeBlind = clonePos(bot.entity.position);
 		try { await bot.look(best.yaw, 0, true); } catch {}
 		bot.setControlState("forward", true);

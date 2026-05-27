@@ -83,7 +83,7 @@ pi /login             # OAuth flow — ChatGPT Pro / Claude Max
 #    Terminal 1: the daemon (logs in stdout, persists state under state/<host>/)
 npm run bot
 
-#    Terminal 2: the dashboard (Ink TUI). Hotkeys: p/s/r/c/a/q.
+#    Terminal 2: the dashboard (Ink TUI). Hotkeys: p/s/r/c/a/k/v/!/y/q.
 npm run tui
 ```
 
@@ -105,6 +105,9 @@ The TUI auto-reconnects to the bot if you restart it. Press `q` to leave the TUI
 | `r` | Force a fresh status snapshot. |
 | `c` | Send a chat message into MC. |
 | `a` | Ask Pi (one-shot subprocess). |
+| `k` | Run one registered skill with optional JSON args. |
+| `v` | Capture a viewer screenshot for debugging. |
+| `!` | Force a critic-backed incident/proposal. |
 | `y` | Open the latest pending proposal (badge appears in status bar). In the panel: `y` approve, `n`/Esc close. |
 | `q` | Quit the TUI — bot keeps running. |
 
@@ -213,7 +216,7 @@ These are mirrored in `AGENTS.md` and re-stated at the top of any system prompt 
 
 🌱 **Phase 3 — Goal-driven autonomy** seeded: [`docs/memory-model.md`](./docs/memory-model.md) defines shared-knowledge vs personal-memory; per-server `goal.md` / `plan.md` / `current-task.json` / `diary/` shape autonomous behaviour.
 
-🌿 **Survival-bot pivot (2026-05-25)** — the bot is becoming a self-sufficient survival resident of the configured server. **MC chat is dialog-only**; operator/player chat commands are recorded but not dispatched (TUI is the only local control plane). Full plan: `plans/autonomous-survival-bot-prd.md` (local-only, gitignored). Phase 0 (chat-control cleanup, version auto-detect) is done; Phase 1+ (observability, skill substrate, survival curriculum, base/village loop) is the next focus.
+🌿 **Survival-bot pivot (2026-05-25)** — the bot is becoming a self-sufficient survival resident of the configured server. **MC chat is dialog-only**; operator/player chat commands are recorded but not dispatched (TUI is the only local control plane). The hybrid runtime now has enriched perception, priority modes, a skill-driven curriculum, food acquisition, bed/sleep, base/chest/shelter/farm skills, persistent skill metrics, scenario memory, and a scoped auto-patch loop with `npm test` smoke gating. Full plan: `plans/autonomous-survival-bot-prd.md` (local-only, gitignored).
 
 Full plan: [`docs/roadmap.md`](./docs/roadmap.md). Memory layout: [`docs/memory-model.md`](./docs/memory-model.md). Day-to-day judgement: "Operating principles" in [`AGENTS.md`](./AGENTS.md).
 

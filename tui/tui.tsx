@@ -275,7 +275,7 @@ function PiPanel({ piStream, piRunning }: { piStream: string; piRunning: boolean
 	);
 }
 
-type Mode = "idle" | "chat" | "ask-pi";
+type Mode = "idle" | "chat" | "ask-pi" | "run-skill" | "incident";
 
 function App() {
 	const { exit } = useApp();
@@ -366,6 +366,9 @@ function App() {
 		}
 		if (input === "c") setMode("chat");
 		if (input === "a") setMode("ask-pi");
+		if (input === "k") setMode("run-skill");
+		if (input === "v") client.send(COMMAND_TYPES.SCREENSHOT, { reason: "tui", frames: 1 });
+		if (input === "!") setMode("incident");
 		if (input === "y") client.send(COMMAND_TYPES.PROPOSAL_LATEST, {});
 	});
 
@@ -377,14 +380,33 @@ function App() {
 		if (!text) return;
 		if (m === "chat") client.send(COMMAND_TYPES.CHAT, { text });
 		else if (m === "ask-pi") client.send(COMMAND_TYPES.ASK_PI, { prompt: text });
+		else if (m === "run-skill") {
+			const [skillId, ...rest] = text.split(/\s+/);
+			let args = {};
+			const json = rest.join(" ").trim();
+			if (json) {
+				try { args = JSON.parse(json); }
+				catch {
+					client.send(COMMAND_TYPES.ASK_PI, { prompt: `Parse this run-skill argument JSON for ${skillId}: ${json}` });
+					return;
+				}
+			}
+			client.send(COMMAND_TYPES.RUN_SKILL, { skillId, args });
+		} else if (m === "incident") {
+			client.send(COMMAND_TYPES.FORCE_INCIDENT, { reason: text, kind: "operator-forced" });
+		}
 	}
 
 	const hotkeyHint =
 		mode === "idle"
-			? "[p]ause/resume  [s]top  [r]efresh  [c]hat  [a]sk-pi  [y] proposals  [q]uit"
+			? "[p]ause/resume  [s]top  [r]efresh  [c]hat  [a]sk-pi  [k] skill  [v] screenshot  [!] incident  [y] proposals  [q]uit"
 			: mode === "chat"
 			? "chat → MC (Enter to send, Esc to cancel)"
-			: "ask-pi → spawn pi -p (Enter to send)";
+			: mode === "ask-pi"
+			? "ask-pi → spawn pi -p (Enter to send)"
+			: mode === "run-skill"
+			? 'run-skill → skill.id {"arg":true}'
+			: "incident → reason for critic/auto-improve proposal";
 
 	return (
 		<Box flexDirection="column">
@@ -412,7 +434,7 @@ function App() {
 				) : (
 					<>
 						<Text bold color={mode === "chat" ? "cyan" : "magenta"}>
-							{mode === "chat" ? "chat> " : "pi> "}
+							{mode === "chat" ? "chat> " : mode === "ask-pi" ? "pi> " : mode === "run-skill" ? "skill> " : "incident> "}
 						</Text>
 						<TextInput
 							value={inputValue}
