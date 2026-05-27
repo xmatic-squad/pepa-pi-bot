@@ -140,105 +140,73 @@ function foodColor(food: number | undefined) {
 
 // --- components -------------------------------------------------------------
 
-function Header({ snapshot, connectedIpc, width, startedAt }: { snapshot: Snapshot; connectedIpc: boolean; width: number; startedAt: number }) {
+function StatusHeader({ snapshot, connectedIpc, width, startedAt }: { snapshot: Snapshot; connectedIpc: boolean; width: number; startedAt: number }) {
 	const pos = snapshot.position
-		? `(${Math.round(snapshot.position.x)}, ${Math.round(snapshot.position.y)}, ${Math.round(snapshot.position.z)})`
+		? `(${Math.round(snapshot.position.x)},${Math.round(snapshot.position.y)},${Math.round(snapshot.position.z)})`
 		: "?";
 	const hp = snapshot.health;
 	const food = snapshot.food;
-	const day = snapshot.isDay ? "☀ day" : "🌙 night";
+	const day = snapshot.isDay ? "☀" : "🌙";
 	const session = formatDuration(Date.now() - startedAt);
 	const mcOnline = snapshot.connected;
+	const story = snapshot.storyStep;
+	const idx = story?.index ?? 0;
+	const cur = story?.step;
+	const want = story?.suggestion?.skillId;
+	// 11-step progress bar in 11 cells
+	const bar = Array.from({ length: 11 }, (_, i) => {
+		if (i < idx) return "▓";
+		if (i === idx) return "▒";
+		return "░";
+	}).join("");
 	return (
 		<Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={width}>
 			<Box>
-				<Text bold color="cyan">pepa-monitor</Text>
-				<Text dimColor>  ·  </Text>
-				<Text color={mcOnline ? "green" : "red"}>{mcOnline ? "● MC" : "○ MC"}</Text>
-				<Text dimColor>  ·  </Text>
-				<Text color={connectedIpc ? "green" : "red"}>{connectedIpc ? "● IPC" : "○ IPC"}</Text>
-				<Text dimColor>  ·  </Text>
-				<Text>session {session}</Text>
-				<Text dimColor>  ·  </Text>
-				<Text>user </Text><Text bold>{snapshot.username ?? "?"}</Text>
-			</Box>
-			<Box>
-				<Text>pos </Text><Text bold>{pos}</Text>
-				<Text dimColor>   </Text>
-				<Text>HP </Text>
-				<Text bold color={hpColor(hp)}>{hp ?? "?"}/20</Text>
-				<Text dimColor>   </Text>
-				<Text>food </Text>
-				<Text bold color={foodColor(food)}>{food ?? "?"}/20</Text>
-				<Text dimColor>   </Text>
+				<Text bold color="cyan">pepa</Text>
+				<Text dimColor> · </Text>
+				<Text color={mcOnline ? "green" : "red"}>{mcOnline ? "●MC" : "○MC"}</Text>
+				<Text dimColor> · </Text>
+				<Text color={connectedIpc ? "green" : "red"}>{connectedIpc ? "●IPC" : "○IPC"}</Text>
+				<Text dimColor> · </Text>
+				<Text>{session}</Text>
+				<Text dimColor> · </Text>
+				<Text bold>{snapshot.username ?? "?"}</Text>
+				<Text dimColor> · </Text>
+				<Text>{pos}</Text>
+				<Text dimColor> · </Text>
+				<Text>HP </Text><Text bold color={hpColor(hp)}>{hp ?? "?"}</Text>
+				<Text dimColor> · </Text>
+				<Text>food </Text><Text bold color={foodColor(food)}>{food ?? "?"}</Text>
+				<Text dimColor> · </Text>
 				<Text>{day}</Text>
-				<Text dimColor>   hostiles </Text>
-				<Text color={(snapshot.hostileCount ?? 0) > 0 ? "red" : "gray"}>{snapshot.hostileCount ?? 0}</Text>
-				{snapshot.closestHostile ? <Text color="red">  closest {snapshot.closestHostile.name}@{snapshot.closestHostile.distance}b</Text> : null}
+				{(snapshot.hostileCount ?? 0) > 0 ? (
+					<>
+						<Text dimColor> · </Text>
+						<Text color="red">⚔{snapshot.hostileCount}</Text>
+						{snapshot.closestHostile ? <Text color="red">({snapshot.closestHostile.name}@{Math.round(snapshot.closestHostile.distance)}b)</Text> : null}
+					</>
+				) : null}
 			</Box>
-		</Box>
-	);
-}
-
-function StorylinePanel({ snapshot, width }: { snapshot: Snapshot; width: number }) {
-	const story = snapshot.storyStep;
-	if (!story) {
-		return (
-			<Box borderStyle="round" borderColor="gray" paddingX={1} width={width}>
-				<Text dimColor>storyline not available (bot offline or storyline disabled)</Text>
-			</Box>
-		);
-	}
-	const STEPS = [
-		"orient_self", "first_wood", "crafting_basics", "first_tools", "first_food",
-		"shelter_minimal", "stone_tier", "food_security", "iron_age", "settle_base", "village_grow",
-	];
-	const TITLES: Record<string, string> = {
-		orient_self: "Понять где я",
-		first_wood: "Собрать 8 поленьев",
-		crafting_basics: "Сделать верстак и палки",
-		first_tools: "Деревянные орудия",
-		first_food: "Найти первую еду",
-		shelter_minimal: "Простой шелтер с кроватью",
-		stone_tier: "Каменные орудия",
-		food_security: "Запас еды на 16+",
-		iron_age: "Железо и печь",
-		settle_base: "Постоянная база",
-		village_grow: "Развивать деревню",
-	};
-	const idx = story.index ?? 0;
-	const cur = story.step;
-	const want = story.suggestion?.skillId;
-	const emergency = story.emergency;
-	return (
-		<Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} width={width}>
 			<Box>
-				<Text bold color="magenta">storyline</Text>
-				<Text dimColor>   step </Text>
+				<Text color="magenta">story </Text>
+				<Text bold>{bar}</Text>
+				<Text dimColor> </Text>
 				<Text bold>{idx + 1}/11</Text>
-				<Text dimColor>   </Text>
-				<Text bold color="white">{cur?.id}</Text>
-				<Text dimColor>   {cur?.title}</Text>
-				{emergency ? <Text color="red" bold>   [EMERGENCY PAUSE]</Text> : null}
-			</Box>
-			{want ? (
-				<Box>
-					<Text dimColor>wants: </Text>
-					<Text color="cyan">{want}</Text>
-				</Box>
-			) : null}
-			<Box flexDirection="column" marginTop={1}>
-				{STEPS.map((id, i) => {
-					const done = i < idx;
-					const current = i === idx;
-					const mark = done ? "✓" : current ? "→" : "○";
-					const color = done ? "green" : current ? "yellow" : "gray";
-					return (
-						<Text key={id} color={color}>
-							{`  ${mark} ${(i + 1).toString().padStart(2)}. ${id.padEnd(18)} ${TITLES[id] ?? ""}`}
-						</Text>
-					);
-				})}
+				<Text dimColor> </Text>
+				{cur ? (
+					<>
+						<Text color="white" bold>{cur.id}</Text>
+						<Text dimColor> · </Text>
+						<Text>{cur.title}</Text>
+					</>
+				) : <Text dimColor>(no story)</Text>}
+				{want ? (
+					<>
+						<Text dimColor> → </Text>
+						<Text color="cyan">{want}</Text>
+					</>
+				) : null}
+				{story?.emergency ? <Text color="red" bold> [EMERGENCY]</Text> : null}
 			</Box>
 		</Box>
 	);
@@ -300,17 +268,20 @@ function AdvisorPanel({ recs, width, height }: { recs: any[]; width: number; hei
 				const ok = r.outcome_ok;
 				const outcomeMark = ok == null ? "·" : ok ? "✓" : "✗";
 				const outcomeColor = ok == null ? "gray" : ok ? "green" : "red";
-				const tail = `${r.tokens_in ?? "?"}/${r.tokens_out ?? "?"}t  ${r.latency_ms ?? "?"}ms`;
+				const target = r.recommended_skill ?? r.action;
+				const trigger = String(r.trigger_reason ?? "?");
+				// One line per recommendation: " ✓ wedged_60s → survive.flee  802t 1900ms"
+				const lhs = `${outcomeMark} ${trigger} → ${target}`;
+				const rhs = `${r.tokens_in ?? "?"}t ${r.latency_ms ?? "?"}ms`;
+				const free = Math.max(20, width - rhs.length - 6);
 				return (
-					<Box key={`adv-${r.id}`} flexDirection="column">
-						<Text>
-							<Text color={outcomeColor} bold>{outcomeMark} </Text>
-							<Text color="white">{r.trigger_reason}</Text>
-							<Text dimColor> → </Text>
-							<Text color="cyan">{r.recommended_skill ?? r.action}</Text>
-						</Text>
-						<Text dimColor>    {tail}{r.rationale ? ` · ${String(r.rationale).slice(0, width - 14)}` : ""}</Text>
-					</Box>
+					<Text key={`adv-${r.id}`}>
+						<Text color={outcomeColor} bold>{outcomeMark} </Text>
+						<Text color="white">{trigger}</Text>
+						<Text dimColor> → </Text>
+						<Text color="cyan">{String(target).slice(0, Math.max(8, free - trigger.length - 6))}</Text>
+						<Text dimColor>  {rhs}</Text>
+					</Text>
 				);
 			})}
 			{visible.length === 0 ? <Text dimColor>(no advisor calls yet)</Text> : null}
@@ -322,19 +293,14 @@ function ImprovementsPanel({ items, width, height }: { items: any[]; width: numb
 	const visible = items.slice(0, height);
 	return (
 		<Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} width={width}>
-			<Text bold color="magenta">Improvements (open: {items.length})</Text>
+			<Text bold color="magenta">Improvements (open {items.length})</Text>
 			{visible.map((r) => (
-				<Box key={`imp-${r.id}`} flexDirection="column">
-					<Text>
-						<Text color="gray">#{r.id} </Text>
-						<Text color="yellow">P{r.priority}</Text>
-						<Text dimColor> ×{r.votes} </Text>
-						<Text color="white">{String(r.title).slice(0, width - 14)}</Text>
-					</Text>
-					{r.description ? (
-						<Text dimColor>    {String(r.description).slice(0, width - 8)}</Text>
-					) : null}
-				</Box>
+				<Text key={`imp-${r.id}`}>
+					<Text color="gray">#{r.id} </Text>
+					<Text color="yellow">P{r.priority}</Text>
+					<Text dimColor> ×{r.votes} </Text>
+					<Text color="white">{String(r.title).slice(0, Math.max(20, width - 14))}</Text>
+				</Text>
 			))}
 			{visible.length === 0 ? <Text dimColor>(no improvement requests yet)</Text> : null}
 		</Box>
@@ -477,17 +443,20 @@ function App() {
 		});
 	}
 
-	// Layout math: full-width header & storyline, then split 50/50.
+	// Layout math: compact 4-section vertical stack.
+	// row budget:
+	//   header (story + status) ≈ 4 rows
+	//   middle activity/chat     ≈ floor((rows - 4 - 4 - 4) / 2)
+	//   bottom advisor/improvements ≈ same
+	//   footer ≈ 4 rows
 	const totalWidth = Math.max(80, cols);
 	const halfWidth = Math.floor(totalWidth / 2);
-	const totalRows = Math.max(24, rows);
-	// rough allocation: header 4, storyline ~14, footer 4. Rest split for middle panels.
-	const middleRows = Math.max(8, Math.floor((totalRows - 4 - 14 - 4) / 2));
+	const totalRows = Math.max(20, rows);
+	const middleRows = Math.max(5, Math.floor((totalRows - 4 - 4 - 4) / 2));
 
 	return (
 		<Box flexDirection="column" width={totalWidth}>
-			<Header snapshot={state.snapshot} connectedIpc={state.connectedIpc} width={totalWidth} startedAt={state.startedAt} />
-			<StorylinePanel snapshot={state.snapshot} width={totalWidth} />
+			<StatusHeader snapshot={state.snapshot} connectedIpc={state.connectedIpc} width={totalWidth} startedAt={state.startedAt} />
 			<Box flexDirection="row" width={totalWidth}>
 				<ActivityPanel dispatches={state.dispatches} width={halfWidth} height={middleRows} />
 				<ChatPanel chat={state.chat} width={totalWidth - halfWidth} height={middleRows} />
