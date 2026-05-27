@@ -20,10 +20,12 @@ const SAFE_OVERRIDES = new Set([
 	"survive.flee",
 	"survive.sleep",
 	"survive.eat",
+	"survive.pillar-up",
 	"recovery.tunnel-out",
 	"explore.far",
 	"explore.wander",
 	"village.build-shelter",
+	"village.choose-base",
 ]);
 
 // Pi-coach occasionally suggests prefer_skill values that are mode names
