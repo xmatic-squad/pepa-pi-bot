@@ -21,6 +21,7 @@
 
 import { advise, isAvailable as advisorAvailable } from "./fast-advisor.js";
 import { isRegistered } from "../skill-registry.js";
+import { insertRecommendation } from "../knowledge/index.js";
 import { info, warn } from "../log.js";
 
 const TRIGGER_COOLDOWN_MS = 90_000;
@@ -28,6 +29,11 @@ const RECOMMENDATION_TTL_MS = 60_000;
 const WEDGED_THRESHOLD_MS = 60_000;
 const REPEAT_THRESHOLD = 4;
 const PREEMPT_WINDOW_MS = 30_000;
+// Emergency triggers — bypass cooldown because waiting another 90s
+// when the bot is about to die is not useful.
+const EMERGENCY_HP = 6;
+const EMERGENCY_HOSTILE_DIST = 8;
+const EMERGENCY_COOLDOWN_MS = 20_000;
 
 let _lastTriggerAt = 0;
 let _inFlight = false;
@@ -57,9 +63,6 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 	if (_inFlight) return { fired: false, reason: "in_flight" };
 
 	const now = Date.now();
-	if (now - _lastTriggerAt < TRIGGER_COOLDOWN_MS) {
-		return { fired: false, reason: "cooldown" };
-	}
 
 	// Drop a recommendation that's already aged out.
 	if (ctx.advisorRecommendation && now - ctx.advisorRecommendation.at > RECOMMENDATION_TTL_MS) {
@@ -69,18 +72,42 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 	const reason = detectTrigger(ctx, now, plannedSkillId);
 	if (!reason) return { fired: false, reason: "no_trigger" };
 
+	// Emergency triggers use a much shorter cooldown — waiting 90s with
+	// HP=4 and a creeper at 3 blocks is exactly when we MUST hit the LLM.
+	const isEmergency = reason.startsWith("emergency_");
+	const cooldownMs = isEmergency ? EMERGENCY_COOLDOWN_MS : TRIGGER_COOLDOWN_MS;
+	if (now - _lastTriggerAt < cooldownMs) {
+		return { fired: false, reason: "cooldown" };
+	}
+
 	_lastTriggerAt = now;
 	_inFlight = true;
 	const snapshot = ctx.snapshot ?? null;
 	const recentSkillIds = (ctx.recentSkillIds ?? []).slice(-8);
+	const activeNeed = ctx.activeNeed ?? null;
 
-	info("advisor-trigger", `firing because ${reason} (planned=${plannedSkillId ?? "?"})`);
+	info("advisor-trigger", `firing because ${reason} (planned=${plannedSkillId ?? "?"}, need=${activeNeed?.need?.id ?? "?"})`);
 	// Fire-and-forget. The promise's resolution writes ctx.advisorRecommendation.
-	advise({ snapshot, reason, recentSkillIds, lessonsTail: ctx.recentLessons ?? [], force: true })
+	advise({ snapshot, reason, recentSkillIds, lessonsTail: ctx.recentLessons ?? [], activeNeed, force: true })
 		.then((result) => {
 			_inFlight = false;
+			const needLabel = activeNeed
+				? `L${activeNeed.need.level} ${activeNeed.need.id}`
+				: null;
 			if (result.ok && result.action === "switch_skill" && isRegistered(result.skillId)) {
+				const recId = insertRecommendation({
+					triggerReason: reason,
+					plannedSkill: plannedSkillId ?? null,
+					recommendedSkill: result.skillId,
+					action: "switch_skill",
+					rationale: result.rationale,
+					activeNeed: needLabel,
+					tokensIn: result.usage?.in,
+					tokensOut: result.usage?.out,
+					latencyMs: result.latencyMs,
+				});
 				ctx.advisorRecommendation = {
+					id: recId,
 					at: Date.now(),
 					skillId: result.skillId,
 					action: "switch_skill",
@@ -89,9 +116,21 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 					latencyMs: result.latencyMs,
 					usage: result.usage ?? null,
 				};
-				info("advisor-trigger", `recommendation cached: ${result.skillId} (${result.latencyMs}ms, in=${result.usage?.in ?? "?"}t/out=${result.usage?.out ?? "?"}t)`);
+				info("advisor-trigger", `recommendation cached: ${result.skillId} (${result.latencyMs}ms, in=${result.usage?.in ?? "?"}t/out=${result.usage?.out ?? "?"}t, db=${recId ?? "-"})`);
 			} else if (result.ok && (result.action === "wait" || result.action === "continue")) {
+				const recId = insertRecommendation({
+					triggerReason: reason,
+					plannedSkill: plannedSkillId ?? null,
+					recommendedSkill: null,
+					action: result.action,
+					rationale: result.rationale,
+					activeNeed: needLabel,
+					tokensIn: result.usage?.in,
+					tokensOut: result.usage?.out,
+					latencyMs: result.latencyMs,
+				});
 				ctx.advisorRecommendation = {
+					id: recId,
 					at: Date.now(),
 					action: result.action,
 					rationale: result.rationale,
@@ -113,6 +152,21 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 }
 
 function detectTrigger(ctx, now, plannedSkillId) {
+	const snap = ctx.snapshot ?? {};
+
+	// 0. EMERGENCY: low HP + hostile near — call BEFORE the bot dies.
+	// Checked first so reason string starts with "emergency_" → bypasses
+	// the long trigger cooldown via the caller's isEmergency check.
+	const hp = snap.health ?? 20;
+	const hostile = snap.closestHostile;
+	if (hp <= EMERGENCY_HP && hostile && (hostile.distance ?? Infinity) <= EMERGENCY_HOSTILE_DIST) {
+		return `emergency_hp${Math.round(hp)}_${hostile.name ?? "hostile"}@${Math.round(hostile.distance)}`;
+	}
+	// 0b. EMERGENCY: drowning / lava / lethal fluid
+	if (snap.hazards?.footBlock === "lava") {
+		return "emergency_lava";
+	}
+
 	// 1. Wedged > threshold
 	if (ctx.lastSignificantMoveAt && (now - ctx.lastSignificantMoveAt) > WEDGED_THRESHOLD_MS) {
 		return `wedged_${Math.round((now - ctx.lastSignificantMoveAt) / 1000)}s`;

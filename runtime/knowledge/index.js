@@ -227,6 +227,191 @@ export function logChat({ direction, speaker, text, intent, repliedWith } = {}) 
 	}
 }
 
+// ---- v0.3.0 advisor recommendations ----------------------------------------
+//
+// Every fast-advisor call that produced a usable answer is logged here.
+// Rows are mutated post-hoc when reflex applies and when the dispatch
+// finishes — this is the ground truth for "is the LLM advice actually
+// helping" and the input to trigger-tuner.js.
+
+export function insertRecommendation({
+	triggerReason, plannedSkill, recommendedSkill, action, rationale,
+	activeNeed, tokensIn, tokensOut, latencyMs,
+} = {}) {
+	if (!_isAvailable()) return null;
+	try {
+		const res = _getStore().prepare(`
+			INSERT INTO advisor_recommendations
+			  (ts, trigger_reason, planned_skill, recommended_skill, action, rationale,
+			   active_need, tokens_in, tokens_out, latency_ms, applied)
+			VALUES
+			  (@ts, @triggerReason, @plannedSkill, @recommendedSkill, @action, @rationale,
+			   @activeNeed, @tokensIn, @tokensOut, @latencyMs, 0)
+		`).run({
+			ts: Date.now(),
+			triggerReason,
+			plannedSkill: plannedSkill ?? null,
+			recommendedSkill: recommendedSkill ?? null,
+			action,
+			rationale: rationale ?? null,
+			activeNeed: activeNeed ?? null,
+			tokensIn: tokensIn ?? null,
+			tokensOut: tokensOut ?? null,
+			latencyMs: latencyMs ?? null,
+		});
+		return res.lastInsertRowid;
+	} catch (e) {
+		warn("knowledge", `insertRecommendation failed: ${e?.message ?? e}`);
+		return null;
+	}
+}
+
+export function markRecommendationApplied(id) {
+	if (!_isAvailable() || !id) return;
+	try {
+		_getStore().prepare(`UPDATE advisor_recommendations SET applied = 1 WHERE id = ?`).run(id);
+	} catch (e) {
+		warn("knowledge", `markRecommendationApplied failed: ${e?.message ?? e}`);
+	}
+}
+
+export function markRecommendationOutcome(id, { ok, code } = {}) {
+	if (!_isAvailable() || !id) return;
+	try {
+		_getStore().prepare(`
+			UPDATE advisor_recommendations
+			SET outcome_ok = @ok, outcome_code = @code, outcome_at = @at
+			WHERE id = @id
+		`).run({ id, ok: ok ? 1 : 0, code: code ?? null, at: Date.now() });
+	} catch (e) {
+		warn("knowledge", `markRecommendationOutcome failed: ${e?.message ?? e}`);
+	}
+}
+
+export function recommendationStats({ sinceHours = 24 } = {}) {
+	if (!_isAvailable()) return [];
+	try {
+		const since = Date.now() - sinceHours * 3600_000;
+		return _getStore().prepare(`
+			SELECT trigger_reason,
+			       COUNT(*) AS total,
+			       SUM(applied) AS applied,
+			       SUM(CASE WHEN outcome_ok = 1 THEN 1 ELSE 0 END) AS succeeded,
+			       SUM(CASE WHEN outcome_ok = 0 THEN 1 ELSE 0 END) AS failed,
+			       AVG(tokens_in) AS avg_in,
+			       AVG(tokens_out) AS avg_out,
+			       AVG(latency_ms) AS avg_latency_ms
+			FROM advisor_recommendations
+			WHERE ts >= @since
+			GROUP BY trigger_reason
+			ORDER BY total DESC
+		`).all({ since });
+	} catch (e) {
+		warn("knowledge", `recommendationStats failed: ${e?.message ?? e}`);
+		return [];
+	}
+}
+
+export function recentRecommendations({ limit = 20 } = {}) {
+	if (!_isAvailable()) return [];
+	try {
+		return _getStore().prepare(`
+			SELECT * FROM advisor_recommendations ORDER BY ts DESC LIMIT @limit
+		`).all({ limit });
+	} catch (e) {
+		warn("knowledge", `recentRecommendations failed: ${e?.message ?? e}`);
+		return [];
+	}
+}
+
+// ---- v0.3.0 improvement requests -------------------------------------------
+//
+// The LLM (postmortem / reflect / advisor) writes here when it sees the bot
+// lack a needed skill or feature. Operator-readable via scripts/list-improvements.js.
+
+export function createImprovementRequest({
+	source, category, title, description, context, priority = 3,
+} = {}) {
+	if (!_isAvailable() || !title) return null;
+	try {
+		// Dedup: if an open request with same title (case-insensitive) exists,
+		// bump its votes instead of inserting a new row.
+		const dup = _getStore().prepare(`
+			SELECT id, votes FROM improvement_requests
+			WHERE LOWER(title) = LOWER(?) AND status = 'open'
+			ORDER BY ts DESC LIMIT 1
+		`).get(title);
+		if (dup) {
+			_getStore().prepare(`UPDATE improvement_requests SET votes = votes + 1 WHERE id = ?`).run(dup.id);
+			return dup.id;
+		}
+		const res = _getStore().prepare(`
+			INSERT INTO improvement_requests
+			  (ts, source, category, title, description, context, priority, status, votes)
+			VALUES
+			  (@ts, @source, @category, @title, @description, @context, @priority, 'open', 1)
+		`).run({
+			ts: Date.now(),
+			source: source ?? "manual",
+			category: category ?? "other",
+			title,
+			description: description ?? null,
+			context: context ? JSON.stringify(context) : null,
+			priority: clamp(priority, 1, 5),
+		});
+		return res.lastInsertRowid;
+	} catch (e) {
+		warn("knowledge", `createImprovementRequest failed: ${e?.message ?? e}`);
+		return null;
+	}
+}
+
+export function listImprovements({ status, source, category, limit = 50 } = {}) {
+	if (!_isAvailable()) return [];
+	try {
+		const where = [];
+		const params = { limit };
+		if (status) { where.push("status = @status"); params.status = status; }
+		if (source) { where.push("source = @source"); params.source = source; }
+		if (category) { where.push("category = @category"); params.category = category; }
+		const sql = `
+			SELECT * FROM improvement_requests
+			${where.length ? "WHERE " + where.join(" AND ") : ""}
+			ORDER BY (status = 'open') DESC, priority ASC, votes DESC, ts DESC
+			LIMIT @limit
+		`;
+		return _getStore().prepare(sql).all(params).map((r) => ({
+			...r,
+			context: safeParse(r.context),
+		}));
+	} catch (e) {
+		warn("knowledge", `listImprovements failed: ${e?.message ?? e}`);
+		return [];
+	}
+}
+
+export function markImprovementStatus(id, { status, notes } = {}) {
+	if (!_isAvailable() || !id) return;
+	const validStatuses = ["open", "in_progress", "implemented", "rejected", "duplicate"];
+	if (!validStatuses.includes(status)) {
+		warn("knowledge", `markImprovementStatus: invalid status "${status}"`);
+		return;
+	}
+	try {
+		const fields = ["status = @status", "notes = @notes"];
+		const params = { id, status, notes: notes ?? null };
+		if (status === "implemented") {
+			fields.push("implemented_at = @implementedAt");
+			params.implementedAt = Date.now();
+		}
+		_getStore().prepare(`UPDATE improvement_requests SET ${fields.join(", ")} WHERE id = @id`).run(params);
+	} catch (e) {
+		warn("knowledge", `markImprovementStatus failed: ${e?.message ?? e}`);
+	}
+}
+
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, Number(n) || lo)); }
+
 function safeParse(s) {
 	if (!s) return null;
 	try { return JSON.parse(s); } catch { return null; }

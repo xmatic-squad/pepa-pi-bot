@@ -22,6 +22,14 @@ import {
 	recordPOI,
 	poiNearby,
 	logChat,
+	insertRecommendation,
+	markRecommendationApplied,
+	markRecommendationOutcome,
+	recommendationStats,
+	recentRecommendations,
+	createImprovementRequest,
+	listImprovements,
+	markImprovementStatus,
 } from "./index.js";
 import { __resetForTests, closeStore } from "./store.js";
 
@@ -215,6 +223,112 @@ test("chat log: append + select", async () => {
 	const id1 = logChat({ direction: "in", speaker: "alice", text: "привет", intent: "GREETING" });
 	const id2 = logChat({ direction: "out", text: "yo", repliedWith: "template" });
 	assert.ok(id1 && id2);
+});
+
+// ---- v0.3.0 advisor recommendations ---------------------------------------
+
+test("advisor recommendations: insert → markApplied → markOutcome → stats", async () => {
+	await bootstrap();
+	if (!isAvailable()) {
+		assert.equal(insertRecommendation({ triggerReason: "x", action: "switch_skill" }), null);
+		return;
+	}
+	const id = insertRecommendation({
+		triggerReason: "wedged_90s",
+		plannedSkill: "explore.far",
+		recommendedSkill: "recovery.tunnel-out",
+		action: "switch_skill",
+		rationale: "Stuck wedged, tunnel out.",
+		activeNeed: "L2 tools_wood",
+		tokensIn: 700, tokensOut: 40, latencyMs: 5000,
+	});
+	assert.ok(id, "got recommendation id");
+	markRecommendationApplied(id);
+	markRecommendationOutcome(id, { ok: true, code: "done" });
+
+	const recent = recentRecommendations({ limit: 5 });
+	const row = recent.find((r) => r.id === id);
+	assert.ok(row);
+	assert.equal(row.applied, 1);
+	assert.equal(row.outcome_ok, 1);
+
+	// second insert with same trigger to test stats grouping
+	const id2 = insertRecommendation({
+		triggerReason: "wedged_90s",
+		plannedSkill: "explore.far",
+		recommendedSkill: "survive.pillar-up",
+		action: "switch_skill",
+		rationale: "Try pillar.",
+		tokensIn: 720, tokensOut: 50, latencyMs: 6000,
+	});
+	markRecommendationApplied(id2);
+	markRecommendationOutcome(id2, { ok: false, code: "no_progress" });
+
+	const stats = recommendationStats({ sinceHours: 24 });
+	const wedged = stats.find((s) => s.trigger_reason === "wedged_90s");
+	assert.ok(wedged);
+	assert.equal(wedged.total, 2);
+	assert.equal(wedged.applied, 2);
+	assert.equal(wedged.succeeded, 1);
+	assert.equal(wedged.failed, 1);
+});
+
+test("advisor recommendations: graceful no-op on unknown id", async () => {
+	await bootstrap();
+	if (!isAvailable()) return;
+	markRecommendationApplied(null);
+	markRecommendationOutcome(null, { ok: true });
+	markRecommendationOutcome(999999, { ok: true });
+	// no throw = pass
+});
+
+// ---- v0.3.0 improvement requests ------------------------------------------
+
+test("improvement requests: create, dedup-by-title bumps votes, list filters", async () => {
+	await bootstrap();
+	if (!isAvailable()) {
+		assert.equal(createImprovementRequest({ title: "x" }), null);
+		return;
+	}
+	const id1 = createImprovementRequest({
+		source: "postmortem",
+		category: "skill",
+		title: "Add craft.iron-pickaxe skill",
+		description: "Bot has iron ingots but no skill to craft tier-3 pickaxe.",
+		priority: 2,
+	});
+	assert.ok(id1);
+
+	// duplicate title → bumps votes, returns same id
+	const id2 = createImprovementRequest({
+		source: "reflect",
+		category: "skill",
+		title: "Add craft.iron-pickaxe skill",
+		priority: 2,
+	});
+	assert.equal(id2, id1, "dedup returns original id");
+
+	const list = listImprovements({ status: "open", category: "skill" });
+	const row = list.find((r) => r.id === id1);
+	assert.ok(row);
+	assert.equal(row.votes, 2, "votes bumped by duplicate");
+
+	markImprovementStatus(id1, { status: "implemented", notes: "Shipped in v0.3.1" });
+	const updated = listImprovements({ status: "implemented" });
+	assert.ok(updated.some((r) => r.id === id1));
+	const stillOpen = listImprovements({ status: "open" });
+	assert.ok(!stillOpen.some((r) => r.id === id1));
+});
+
+test("improvement requests: priority and status ordering", async () => {
+	await bootstrap();
+	if (!isAvailable()) return;
+	const a = createImprovementRequest({ source: "manual", title: "low-prio thing", priority: 5 });
+	const b = createImprovementRequest({ source: "manual", title: "high-prio thing", priority: 1 });
+	const list = listImprovements({ status: "open" });
+	const ai = list.findIndex((r) => r.id === a);
+	const bi = list.findIndex((r) => r.id === b);
+	assert.ok(bi < ai, "priority 1 listed before priority 5");
 });
 
 // Cleanup: close DB and remove tmp dir.

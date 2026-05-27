@@ -27,6 +27,7 @@ import {
 import { runSkill, getSkill } from "./skills/index.js";
 import { consult as consultAdvice, reportOutcome as reportAdviceOutcome } from "./coach/advice.js";
 import { tickAdvisor, consumeFreshRecommendation } from "./coach/advisor-trigger.js";
+import { markRecommendationApplied, markRecommendationOutcome } from "./knowledge/index.js";
 import { pickActiveNeed } from "./manifesto/state.js";
 import { situationHash } from "./scenario-memory.js";
 import { tickModes } from "./modes.js";
@@ -537,12 +538,15 @@ function curriculumReflex(ctx) {
 	// v0.3.0 fast-advisor: if a fresh recommendation is sitting on ctx
 	// (the result of a previous tick's async advise() call), use it.
 	// This is the closing of the awareness → LLM → action loop.
+	let appliedRecommendationId = null;
 	if (!ctx.disableAdvisor) {
 		const rec = consumeFreshRecommendation(ctx);
 		if (rec && rec.skillId) {
 			info(REFLEX_LOG, `advisor override: ${skillId} → ${rec.skillId} (${rec.triggerReason}, ${rec.rationale?.slice(0, 60)})`);
 			skillId = rec.skillId;
 			skillSource = `advisor:${rec.triggerReason}`;
+			appliedRecommendationId = rec.id ?? null;
+			if (appliedRecommendationId) markRecommendationApplied(appliedRecommendationId);
 		}
 		// Always fire-and-forget another advise() if triggers fire — the
 		// result lands on a future tick. tickAdvisor handles its own
@@ -603,6 +607,12 @@ function curriculumReflex(ctx) {
 		onComplete: (res) => {
 			ctx.skillBackoff = ctx.skillBackoff ?? {};
 			if (advice.lessonId) reportAdviceOutcome({ lessonId: advice.lessonId, succeeded: !!res?.ok });
+			if (appliedRecommendationId) {
+				markRecommendationOutcome(appliedRecommendationId, {
+					ok: !!res?.ok,
+					code: res?.code ?? null,
+				});
+			}
 			if (res?.recovery?.hint === "wander") {
 				// Same fix the old autonomous reflex applied for "no reachable
 				// log" — switch to exploration for a minute.

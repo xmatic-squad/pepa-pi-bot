@@ -15,9 +15,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { isAvailable as knowledgeAvailable, record as recordLesson } from "../knowledge/index.js";
+import { isAvailable as knowledgeAvailable, record as recordLesson, createImprovementRequest } from "../knowledge/index.js";
 import { isRegistered, skillRegistryPrompt } from "../skill-registry.js";
 import { pickActiveNeed } from "../manifesto/state.js";
+import { isAvailable as llmAvailable } from "../llm/provider.js";
+import { askAnalytical } from "./llm-call.js";
 import { info, warn } from "../log.js";
 
 // Mode-name allow-list, mirrors postmortem.js (advice.js maps them to
@@ -37,25 +39,25 @@ const HISTORY_TAIL_LINES = 80;
 
 let _attached = null;
 let _timer = null;
-let _piCallTimes = [];
+let _llmCallTimes = [];
 
-export function attach({ bot, stateDir, askPi, getSnapshot, intervalMs = DEFAULT_INTERVAL_MS } = {}) {
+export function attach({ bot, stateDir, getSnapshot, intervalMs = DEFAULT_INTERVAL_MS } = {}) {
 	if (_attached) {
 		warn("reflect", "attach called twice; ignoring");
 		return;
 	}
-	if (!stateDir || !askPi || !getSnapshot) {
-		info("reflect", "attach: missing stateDir/askPi/getSnapshot — disabled");
+	if (!stateDir || !getSnapshot) {
+		info("reflect", "attach: missing stateDir/getSnapshot — disabled");
 		return;
 	}
-	_attached = { bot, stateDir, askPi, getSnapshot };
+	_attached = { bot, stateDir, getSnapshot };
 	_timer = setInterval(() => {
-		runOnce({ stateDir, askPi, getSnapshot }).catch((e) =>
+		runOnce({ stateDir, getSnapshot }).catch((e) =>
 			warn("reflect", `tick err: ${e?.message ?? e}`),
 		);
 	}, intervalMs);
 	_timer.unref?.();
-	info("reflect", `attached; self-assess every ${Math.round(intervalMs / 60000)} min`);
+	info("reflect", `attached; self-assess every ${Math.round(intervalMs / 60000)} min${llmAvailable() ? " (TimeWeb)" : " (LLM disabled — will skip)"}`);
 }
 
 export function detach() {
@@ -64,12 +66,13 @@ export function detach() {
 	_attached = null;
 }
 
-export async function runOnce({ stateDir, askPi, getSnapshot, force = false } = {}) {
+export async function runOnce({ stateDir, getSnapshot, force = false, askAnalyticalFn = askAnalytical } = {}) {
 	const now = Date.now();
 	const hourAgo = now - 3600_000;
-	_piCallTimes = _piCallTimes.filter((t) => t > hourAgo);
-	if (!force && _piCallTimes.length >= HOURLY_BUDGET) {
-		return { ok: false, reason: "budget exhausted", calls: _piCallTimes.length };
+	_llmCallTimes = _llmCallTimes.filter((t) => t > hourAgo);
+	if (!llmAvailable()) return { ok: false, reason: "llm not configured" };
+	if (!force && _llmCallTimes.length >= HOURLY_BUDGET) {
+		return { ok: false, reason: "budget exhausted", calls: _llmCallTimes.length };
 	}
 
 	const snap = getSnapshot();
@@ -79,17 +82,12 @@ export async function runOnce({ stateDir, askPi, getSnapshot, force = false } = 
 	const plan = readPlan(stateDir);
 	const activeNeed = pickActiveNeed(snap);
 
-	const prompt = buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed });
-	_piCallTimes.push(now);
+	const { system, user } = buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed });
+	_llmCallTimes.push(now);
 
-	const reply = await askPiOnce({ askPi, prompt });
-	if (!reply) return { ok: false, reason: "no reply" };
-
-	const parsed = parseReply(reply);
-	if (!parsed) {
-		warn("reflect", "Pi reply not parseable as JSON");
-		return { ok: false, reason: "bad reply", raw: reply.slice(0, 200) };
-	}
+	const parsed = await askAnalyticalFn({ system, user, json: true });
+	if (!parsed || typeof parsed !== "object") return { ok: false, reason: "no reply" };
+	const reply = JSON.stringify(parsed);
 
 	const path = writeReflection(stateDir, parsed, reply);
 	let rejectedPrefer = 0;
@@ -112,15 +110,34 @@ export async function runOnce({ stateDir, askPi, getSnapshot, force = false } = 
 			avoidSkill,
 			preferSkill,
 			confidence: clamp(Number(l.confidence) || 0.5, 0.1, 0.9),
-			source: "pi-reflect",
+			source: "timeweb-reflect",
 			sourceRef: path,
 		});
 	}
 	if (rejectedPrefer > 0) {
 		warn("reflect", `dropped prefer_skill from ${rejectedPrefer} reflection lessons (not in registry)`);
 	}
-	info("reflect", `verdict=${parsed.verdict ?? "?"} ${parsed.summary?.slice(0, 80) ?? ""} (${path ?? "no file"})`);
-	return { ok: true, verdict: parsed.verdict, summary: parsed.summary, lessons: parsed.lessons ?? [] };
+
+	// v0.3.0 — improvement requests from reflection. The LLM is asked
+	// to flag missing skills/features when self-reflection reveals a
+	// systemic gap (e.g. "I keep failing iron tools because there's no
+	// craft.iron-pickaxe skill").
+	let improvementsCount = 0;
+	for (const imp of asArray(parsed.improvements ?? [])) {
+		if (!imp?.title) continue;
+		createImprovementRequest({
+			source: "reflect",
+			category: imp.category ?? "skill",
+			title: String(imp.title).slice(0, 120),
+			description: imp.description ?? null,
+			context: { verdict: parsed.verdict, reflection_path: path },
+			priority: imp.priority ?? 3,
+		});
+		improvementsCount += 1;
+	}
+
+	info("reflect", `verdict=${parsed.verdict ?? "?"} ${parsed.summary?.slice(0, 80) ?? ""} lessons=${(parsed.lessons ?? []).length} improvements=${improvementsCount} (${path ?? "no file"})`);
+	return { ok: true, verdict: parsed.verdict, summary: parsed.summary, lessons: parsed.lessons ?? [], improvements: improvementsCount };
 }
 
 function readJournalTail(stateDir) {
@@ -162,12 +179,38 @@ function buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed }) {
 	const needLine = activeNeed
 		? `L${activeNeed.need.level} ${activeNeed.need.id} → ${activeNeed.skillId} (${activeNeed.need.title})`
 		: "(satisfied through L10 / no active need)";
-	return [
+
+	const system = [
 		"You are pepa, an autonomous Minecraft survival bot, reflecting on your own progress.",
-		"Look at the last ~30 minutes of activity below. Answer honestly: are you actually making progress, or stuck in a loop?",
+		"Answer honestly: are you making progress, stuck in a loop, or facing a structural gap?",
 		"",
 		skillRegistryPrompt({ limit: 1800 }),
 		"",
+		"Reply with ONE JSON object (no markdown fences, no prose):",
+		'{',
+		'  "verdict": "progress" | "loop" | "recovering" | "idle" | "emergency",',
+		'  "summary": "<2-3 sentence honest assessment in Russian>",',
+		'  "next_action": "<one-sentence directive>",',
+		'  "lessons": [',
+		'    { "lesson": "<≤30 words, generalised rule>",',
+		'      "category": "combat|pathing|crafting|survival|self-improve",',
+		'      "trigger_skill": "<skill id or null>",',
+		'      "trigger_hostile": "<mob name or null>",',
+		'      "avoid_skill": "<registered skill id or null>",',
+		'      "prefer_skill": "<registered skill id or null>",',
+		'      "confidence": 0.6 } ],',
+		'  "improvements": [',
+		'    { "title": "<≤80 chars: structural gap (e.g. \'No craft.iron-pickaxe skill\')>",',
+		'      "description": "<concrete example showing why no registered skill helps>",',
+		'      "category": "skill|tuning|perception|planning|social|other",',
+		'      "priority": 1 } ]',
+		'}',
+		"",
+		"CRITICAL: avoid_skill and prefer_skill MUST be one of the registered ids above, or null.",
+		"Use 'improvements' ONLY when you identify a structural gap — a missing skill or feature that would unblock a class of situations. Skip it otherwise.",
+	].join("\n");
+
+	const user = [
 		"## Current state",
 		`- position: ${pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : "?"}`,
 		`- hp: ${snap?.health ?? "?"} food: ${snap?.food ?? "?"} day: ${snap?.isDay ? "yes" : "no"}`,
@@ -198,28 +241,9 @@ function buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed }) {
 		"```",
 		journal.slice(-20).join("\n"),
 		"```",
-		"",
-		"Reply with ONE JSON object (no markdown fences, no prose):",
-		'{',
-		'  "verdict": "progress" | "loop" | "recovering" | "idle" | "emergency",',
-		'  "summary": "<2-3 sentence honest assessment in Russian>",',
-		'  "next_action": "<one-sentence directive for what to do next>",',
-		'  "lessons": [',
-		'    { "lesson": "<≤30 words, generalised rule>",',
-		'      "category": "combat|pathing|crafting|survival|self-improve",',
-		'      "trigger_skill": "<skill id or null>",',
-		'      "trigger_hostile": "<mob name or null>",',
-		'      "avoid_skill": "<registered skill id to avoid or null>",',
-		'      "prefer_skill": "<registered skill id to use instead or null>",',
-		'      "confidence": 0.6 }',
-		'  ]',
-		'}',
-		"",
-		"If you're clearly in a loop (same activity, no inventory growth, same position), say so honestly.",
-		"If you're stuck in a bad terrain (deep pit, hostile-rich area), recommend choosing a new base.",
-		"Lessons should be SHORT and ACTIONABLE. Don't repeat lessons the dispatcher already learned.",
-		"CRITICAL: avoid_skill and prefer_skill MUST be one of the registered ids listed at the top of this prompt, or null. Do NOT invent new ids.",
 	].join("\n");
+
+	return { system, user };
 }
 
 function parseReply(text) {
@@ -273,22 +297,6 @@ function writeReflection(stateDir, parsed, raw) {
 		warn("reflect", `writeReflection failed: ${e?.message ?? e}`);
 		return null;
 	}
-}
-
-function askPiOnce({ askPi, prompt }) {
-	return new Promise((res) => {
-		let buf = "";
-		try {
-			askPi({
-				prompt,
-				onChunk: ({ stream, text }) => { if (stream === "stdout") buf += text; },
-				onDone: () => res(buf),
-			});
-		} catch (e) {
-			warn("reflect", `askPi: ${e?.message ?? e}`);
-			res(null);
-		}
-	});
 }
 
 function asArray(v) { return Array.isArray(v) ? v : v ? [v] : []; }

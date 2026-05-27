@@ -4,14 +4,27 @@ import { mkdtempSync, rmSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { initKnowledge, recall } from "../knowledge/index.js";
+import { initKnowledge, recall, listImprovements } from "../knowledge/index.js";
 import { closeStore, __resetForTests, isAvailable } from "../knowledge/store.js";
 import { runOnce, __testing } from "./reflect.js";
 
 const { buildPrompt, parseReply } = __testing;
 
-test("buildPrompt: includes runtime state + plan + diary", () => {
-	const p = buildPrompt({
+function withTimeWebEnv(fn) {
+	const prevKey = process.env.TIMEWEB_API_KEY;
+	const prevModel = process.env.TIMEWEB_MODEL;
+	process.env.TIMEWEB_API_KEY = "test-key";
+	process.env.TIMEWEB_MODEL = "test-model";
+	return Promise.resolve(fn()).finally(() => {
+		if (prevKey === undefined) delete process.env.TIMEWEB_API_KEY;
+		else process.env.TIMEWEB_API_KEY = prevKey;
+		if (prevModel === undefined) delete process.env.TIMEWEB_MODEL;
+		else process.env.TIMEWEB_MODEL = prevModel;
+	});
+}
+
+test("buildPrompt: returns {system, user} with state, plan, diary, improvement schema", () => {
+	const { system, user } = buildPrompt({
 		snap: {
 			position: { x: 600, y: 64, z: 200 },
 			health: 4, food: 6, isDay: false,
@@ -26,15 +39,17 @@ test("buildPrompt: includes runtime state + plan + diary", () => {
 		scenarios: ['{"skillId":"explore.far","code":"wedged"}'],
 		diary: "13:00 spawned\n13:05 died",
 		plan: "1. Gather 16 logs\n2. Craft pickaxe",
+		activeNeed: null,
 	});
-	assert.match(p, /position: \(600, 64, 200\)/);
-	assert.match(p, /hp: 4 food: 6/);
-	assert.match(p, /emergency/);
-	assert.match(p, /Gather 16 logs/);
-	assert.match(p, /Reply with ONE JSON object/);
+	assert.match(user, /position: \(600, 64, 200\)/);
+	assert.match(user, /hp: 4 food: 6/);
+	assert.match(user, /emergency/);
+	assert.match(user, /Gather 16 logs/);
+	assert.match(system, /Reply with ONE JSON object/);
+	assert.match(system, /improvements/);
 });
 
-test("parseReply: extracts JSON from various Pi outputs", () => {
+test("parseReply: extracts JSON from various LLM outputs", () => {
 	assert.deepEqual(parseReply('{"verdict":"loop","summary":"stuck"}'), { verdict: "loop", summary: "stuck" });
 	assert.deepEqual(parseReply('```json\n{"verdict":"progress"}\n```'), { verdict: "progress" });
 	const longReply = 'I see... your situation. Here is my JSON:\n{"verdict":"emergency","summary":"hp critical","lessons":[]}\nDone.';
@@ -43,7 +58,7 @@ test("parseReply: extracts JSON from various Pi outputs", () => {
 	assert.equal(parseReply(""), null);
 });
 
-test("runOnce: writes reflection file + records lessons", async () => {
+test("runOnce: writes reflection file + records lessons + improvement requests", async () => {
 	const tmp = mkdtempSync(join(tmpdir(), "pepa-reflect-test-"));
 	__resetForTests();
 	await initKnowledge({ stateDir: tmp });
@@ -52,39 +67,64 @@ test("runOnce: writes reflection file + records lessons", async () => {
 		return;
 	}
 
-	const fakeReply = JSON.stringify({
-		verdict: "loop",
-		summary: "Бот ходит по кругу, ничего не добывает.",
-		next_action: "выбрать новое место под базу",
-		lessons: [{
-			lesson: "В этой точке постоянные смерти — искать новое место.",
-			category: "survival",
-			prefer_skill: "village.choose-base",
-			confidence: 0.7,
-		}],
+	await withTimeWebEnv(async () => {
+		const fakeReply = {
+			verdict: "loop",
+			summary: "Бот ходит по кругу, ничего не добывает.",
+			next_action: "выбрать новое место под базу",
+			lessons: [{
+				lesson: "В этой точке постоянные смерти — искать новое место.",
+				category: "survival",
+				prefer_skill: "village.choose-base",
+				confidence: 0.7,
+			}],
+			improvements: [
+				{ title: "Add craft.iron-pickaxe skill", description: "Bot mines iron but cannot craft a tier-3 pickaxe.", category: "skill", priority: 2 },
+			],
+		};
+		const askAnalyticalFn = async () => fakeReply;
+		const getSnapshot = () => ({
+			position: { x: 0, y: 64, z: 0 },
+			health: 8, food: 10, isDay: true,
+			runtimeState: "working",
+			inventory: {},
+		});
+
+		const result = await runOnce({ stateDir: tmp, getSnapshot, force: true, askAnalyticalFn });
+		assert.equal(result.ok, true);
+		assert.equal(result.verdict, "loop");
+		assert.equal(result.improvements, 1);
+
+		const reflectionsDir = join(tmp, "reflections");
+		assert.ok(existsSync(reflectionsDir));
+		const files = readdirSync(reflectionsDir);
+		assert.ok(files.length >= 1, `expected ≥1 reflection file, got ${files.length}`);
+
+		const lessons = recall({ category: "survival" });
+		assert.ok(lessons.some((l) => l.source === "timeweb-reflect"), "lesson recorded with source=timeweb-reflect");
+
+		const improvements = listImprovements({ source: "reflect" });
+		assert.ok(improvements.some((r) => r.title === "Add craft.iron-pickaxe skill"));
 	});
-	const askPi = ({ onChunk, onDone }) => {
-		onChunk({ stream: "stdout", text: fakeReply });
-		onDone({ code: 0 });
-	};
-	const getSnapshot = () => ({
-		position: { x: 0, y: 64, z: 0 },
-		health: 8, food: 10, isDay: true,
-		runtimeState: "working",
-		inventory: {},
-	});
 
-	const result = await runOnce({ stateDir: tmp, askPi, getSnapshot, force: true });
-	assert.equal(result.ok, true);
-	assert.equal(result.verdict, "loop");
+	closeStore();
+	try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+});
 
-	const reflectionsDir = join(tmp, "reflections");
-	assert.ok(existsSync(reflectionsDir));
-	const files = readdirSync(reflectionsDir);
-	assert.ok(files.length >= 1, `expected ≥1 reflection file, got ${files.length}`);
-
-	const lessons = recall({ category: "survival" });
-	assert.ok(lessons.some((l) => l.source === "pi-reflect"), "lesson recorded with source=pi-reflect");
+test("runOnce: skipped when LLM not configured", async () => {
+	const tmp = mkdtempSync(join(tmpdir(), "pepa-reflect-test-"));
+	__resetForTests();
+	await initKnowledge({ stateDir: tmp });
+	if (!isAvailable()) {
+		try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+		return;
+	}
+	const prevKey = process.env.TIMEWEB_API_KEY;
+	delete process.env.TIMEWEB_API_KEY;
+	const res = await runOnce({ stateDir: tmp, getSnapshot: () => ({}), force: true });
+	if (prevKey !== undefined) process.env.TIMEWEB_API_KEY = prevKey;
+	assert.equal(res.ok, false);
+	assert.equal(res.reason, "llm not configured");
 
 	closeStore();
 	try { rmSync(tmp, { recursive: true, force: true }); } catch {}
@@ -98,15 +138,15 @@ test("runOnce: budget exhausted → ok=false", async () => {
 		try { rmSync(tmp, { recursive: true, force: true }); } catch {}
 		return;
 	}
-	const askPi = ({ onDone }) => onDone({ code: 0 });
-	const getSnapshot = () => ({});
-	// Fire 2 forced calls to exhaust budget; 3rd without force should fail.
-	await runOnce({ stateDir: tmp, askPi, getSnapshot, force: true });
-	await runOnce({ stateDir: tmp, askPi, getSnapshot, force: true });
-	const res = await runOnce({ stateDir: tmp, askPi, getSnapshot, force: false });
-	assert.equal(res.ok, false);
-	assert.match(res.reason ?? "", /budget|reply/);
-
+	await withTimeWebEnv(async () => {
+		const askAnalyticalFn = async () => ({ verdict: "ok" });
+		const getSnapshot = () => ({});
+		await runOnce({ stateDir: tmp, getSnapshot, force: true, askAnalyticalFn });
+		await runOnce({ stateDir: tmp, getSnapshot, force: true, askAnalyticalFn });
+		const res = await runOnce({ stateDir: tmp, getSnapshot, force: false, askAnalyticalFn });
+		assert.equal(res.ok, false);
+		assert.match(res.reason ?? "", /budget|reply/);
+	});
 	closeStore();
 	try { rmSync(tmp, { recursive: true, force: true }); } catch {}
 });

@@ -50,6 +50,34 @@ test("detectTrigger: returns null when nothing matches", () => {
 	assert.equal(r, null);
 });
 
+test("detectTrigger: low HP + hostile near → emergency_hp", () => {
+	const now = Date.now();
+	const r = detectTrigger({
+		recentSkillIds: [],
+		snapshot: { health: 4, closestHostile: { name: "creeper", distance: 3 } },
+	}, now, "gather.logs");
+	assert.match(r, /^emergency_hp4_creeper@3/);
+});
+
+test("detectTrigger: foot in lava → emergency_lava", () => {
+	const now = Date.now();
+	const r = detectTrigger({
+		recentSkillIds: [],
+		snapshot: { health: 18, hazards: { footBlock: "lava" } },
+	}, now, "explore.far");
+	assert.equal(r, "emergency_lava");
+});
+
+test("detectTrigger: emergency wins over wedged when both present", () => {
+	const now = Date.now();
+	const r = detectTrigger({
+		recentSkillIds: [],
+		snapshot: { health: 4, closestHostile: { name: "skeleton", distance: 5 } },
+		lastSignificantMoveAt: now - 120_000,
+	}, now, "x");
+	assert.match(r, /^emergency_/);
+});
+
 test("detectTrigger: wedged > 60s fires", () => {
 	const now = Date.now();
 	const r = detectTrigger(

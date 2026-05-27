@@ -25,19 +25,22 @@ import {
 	record as recordLesson,
 	poiNearby,
 	recordPOI,
+	createImprovementRequest,
 } from "../knowledge/index.js";
 import { isRegistered, skillRegistryPrompt } from "../skill-registry.js";
+import { isAvailable as llmAvailable } from "../llm/provider.js";
+import { askAnalytical } from "./llm-call.js";
 import { info, warn } from "../log.js";
 
 const COACH_INTERVAL_MS = 5 * 60 * 1000;   // 5 min between coach passes
-const COACH_BATCH_MAX = 8;                  // up to 8 deaths per Pi call
-const COACH_PI_BUDGET_PER_HOUR = 3;         // ≤ 3 Pi calls/hour
+const COACH_BATCH_MAX = 8;                  // up to 8 deaths per LLM call
+const COACH_BUDGET_PER_HOUR = 3;            // ≤ 3 analytical LLM calls/hour
 const COACH_COOLDOWN_MS = 12 * 60 * 1000;   // 12 min between calls
 const RECENT_CHAT_TAIL = 6;
 const SCENARIO_TAIL = 12;
 
 let _attached = null;
-let _piCallTimes = [];
+let _llmCallTimes = [];
 let _coachTimer = null;
 let _lastInventory = null;
 
@@ -76,17 +79,18 @@ export function attach(bot, ctx = {}) {
 		}
 	});
 
-	// Start the periodic Pi-coach drain loop.
-	if (ctx.askPi && !_coachTimer) {
+	// v0.3.0 — postmortem analysis runs through TimeWeb (the fast LLM
+	// provider). Pi CLI no longer drives this loop. The drain timer
+	// fires regardless of whether TimeWeb is configured; drainOnce()
+	// short-circuits when the LLM is unavailable.
+	if (!_coachTimer) {
 		_coachTimer = setInterval(() => {
-			drainOnce({ askPi: ctx.askPi, stateDir: ctx.stateDir }).catch((e) =>
+			drainOnce({ stateDir: ctx.stateDir }).catch((e) =>
 				warn("coach", `drain error: ${e?.message ?? e}`),
 			);
 		}, COACH_INTERVAL_MS);
 		_coachTimer.unref?.();
-		info("coach", `attached; drain every ${COACH_INTERVAL_MS / 1000}s`);
-	} else {
-		info("coach", "attached; Pi not provided, deaths captured without postmortem analysis");
+		info("coach", `attached; drain every ${COACH_INTERVAL_MS / 1000}s${llmAvailable() ? " (TimeWeb)" : " (LLM disabled — deaths captured only)"}`);
 	}
 }
 
@@ -249,34 +253,29 @@ function readJournalNearby(stateDir, pos, radius) {
  * Rate-limited: at most COACH_PI_BUDGET_PER_HOUR calls/hour, with
  * COACH_COOLDOWN_MS gap between calls.
  */
-export async function drainOnce({ askPi, stateDir, force = false } = {}) {
+export async function drainOnce({ stateDir, force = false, askAnalyticalFn = askAnalytical } = {}) {
 	if (!knowledgeAvailable()) return { ok: false, reason: "knowledge unavailable" };
-	if (!askPi) return { ok: false, reason: "no askPi" };
+	if (!llmAvailable()) return { ok: false, reason: "llm not configured" };
 
 	const now = Date.now();
 	const hourAgo = now - 60 * 60 * 1000;
-	_piCallTimes = _piCallTimes.filter((t) => t > hourAgo);
-	if (!force && _piCallTimes.length >= COACH_PI_BUDGET_PER_HOUR) {
-		return { ok: false, reason: "hourly budget exhausted", calls: _piCallTimes.length };
+	_llmCallTimes = _llmCallTimes.filter((t) => t > hourAgo);
+	if (!force && _llmCallTimes.length >= COACH_BUDGET_PER_HOUR) {
+		return { ok: false, reason: "hourly budget exhausted", calls: _llmCallTimes.length };
 	}
-	if (!force && _piCallTimes.length > 0 && now - _piCallTimes[_piCallTimes.length - 1] < COACH_COOLDOWN_MS) {
+	if (!force && _llmCallTimes.length > 0 && now - _llmCallTimes[_llmCallTimes.length - 1] < COACH_COOLDOWN_MS) {
 		return { ok: false, reason: "cooldown" };
 	}
 
 	const pending = unanalysedDeaths({ limit: COACH_BATCH_MAX });
 	if (pending.length === 0) return { ok: true, analysed: 0 };
 
-	const prompt = buildPrompt(pending);
-	_piCallTimes.push(now);
+	const { system, user } = buildPrompt(pending);
+	_llmCallTimes.push(now);
 
-	const reply = await askPiOnce({ askPi, prompt });
-	if (!reply) return { ok: false, reason: "no reply" };
-
-	const parsed = extractJson(reply);
-	if (!parsed) {
-		warn("coach", "Pi reply was not parseable JSON");
-		return { ok: false, reason: "bad reply" };
-	}
+	const parsed = await askAnalyticalFn({ system, user, json: true });
+	if (!parsed) return { ok: false, reason: "no reply" };
+	const reply = typeof parsed === "string" ? parsed : JSON.stringify(parsed);
 
 	let lessonsCount = 0;
 	let rejectedPreferCount = 0;
@@ -312,7 +311,7 @@ export async function drainOnce({ askPi, stateDir, force = false } = {}) {
 		warn("coach", `dropped prefer_skill from ${rejectedPreferCount} lessons (not in registry)`);
 	}
 
-	// Write one postmortem per death; if Pi grouped them, share the same lesson.
+	// Write one postmortem per death; if grouped, share the same lesson.
 	const groupLesson = parsed.lessons?.[0]?.lesson ?? parsed.lesson ?? null;
 	for (const d of pending) {
 		insertPostmortem({
@@ -321,13 +320,31 @@ export async function drainOnce({ askPi, stateDir, force = false } = {}) {
 			lesson: groupLesson,
 			nextAction: parsed.next_action ?? null,
 			rawResponse: reply.slice(0, 4000),
-			source: "pi",
+			source: "timeweb",
 		});
 		markDeathAnalysed(d.id);
 	}
 
-	info("coach", `drain: analysed ${pending.length} deaths → ${lessonsCount} lessons`);
-	return { ok: true, analysed: pending.length, lessons: lessonsCount };
+	// v0.3.0 — record any improvement requests the LLM flagged. The
+	// LLM is encouraged to do this when the deaths point to a missing
+	// skill or feature; the operator reads scripts/list-improvements.js
+	// and decides what to implement.
+	let improvementsCount = 0;
+	for (const imp of asArray(parsed.improvements ?? [])) {
+		if (!imp?.title) continue;
+		createImprovementRequest({
+			source: "postmortem",
+			category: imp.category ?? "skill",
+			title: String(imp.title).slice(0, 120),
+			description: imp.description ?? null,
+			context: { death_ids: pending.map((d) => d.id), cause: parsed.cause },
+			priority: imp.priority ?? 3,
+		});
+		improvementsCount += 1;
+	}
+
+	info("coach", `drain: analysed ${pending.length} deaths → ${lessonsCount} lessons, ${improvementsCount} improvement requests`);
+	return { ok: true, analysed: pending.length, lessons: lessonsCount, improvements: improvementsCount };
 }
 
 // Mode names from runtime/modes.js (advice.js#MODE_TO_SKILL) — we accept
@@ -357,17 +374,14 @@ function buildPrompt(deaths) {
 		].filter(Boolean).join("\n");
 	}).join("\n\n");
 
-	return [
+	const system = [
 		"You are reviewing recent deaths of an autonomous Minecraft survival bot (pepa).",
 		"The bot is trying to gather wood, craft tools, build a small village, and survive nights.",
-		"It's currently dying repeatedly. Your job: extract 1-3 short, generalised lessons it can apply on respawn.",
+		"Your job: extract 1-3 short, generalised lessons + flag any missing-skill gaps.",
 		"",
 		skillRegistryPrompt({ limit: 1800 }),
 		"",
-		"DEATHS:",
-		summary,
-		"",
-		"Reply with ONE JSON object (no prose, no markdown fences):",
+		"Reply with ONE JSON object (no markdown fences):",
 		'{ "cause": "<short>", "next_action": "<one-sentence directive>",',
 		'  "lessons": [',
 		'    { "lesson": "...", "category": "combat|pathing|crafting|survival|social",',
@@ -375,30 +389,20 @@ function buildPrompt(deaths) {
 		'      "trigger_hostile": "<mob name or null>",',
 		'      "avoid_skill": "<registered skill id to NOT dispatch, or null>",',
 		'      "prefer_skill": "<registered skill id to use instead, or null>",',
-		'      "confidence": 0.7 }',
-		'  ] }',
+		'      "confidence": 0.7 } ],',
+		'  "improvements": [',
+		'    { "title": "<≤80 chars: what skill/feature is missing>",',
+		'      "description": "<why current registry doesn\'t cover this; concrete example>",',
+		'      "category": "skill|tuning|perception|planning|social|other",',
+		'      "priority": 1 } ] }',
 		"",
-		"Keep each lesson under 30 words. Be specific (e.g., \"attack creeper with fists\" rather than \"don't fight\").",
+		"Keep each lesson under 30 words. Be specific.",
 		"CRITICAL: avoid_skill and prefer_skill MUST be one of the registered ids above, or null.",
+		"Use 'improvements' ONLY when a death is plausibly caused by the bot lacking a skill that doesn't exist in the registry (e.g. 'no skill to craft iron armor'). Skip it otherwise.",
 	].join("\n");
-}
 
-function askPiOnce({ askPi, prompt }) {
-	return new Promise((resolve) => {
-		let buf = "";
-		try {
-			askPi({
-				prompt,
-				onChunk: ({ stream, text }) => {
-					if (stream === "stdout") buf += text;
-				},
-				onDone: () => resolve(buf),
-			});
-		} catch (e) {
-			warn("coach", `askPi failed: ${e?.message ?? e}`);
-			resolve(null);
-		}
-	});
+	const user = `DEATHS:\n${summary}`;
+	return { system, user };
 }
 
 function extractJson(text) {

@@ -108,6 +108,72 @@ Tests: 315 green (was 279 on rc.1, +36 new):
 - `runtime/reflex.test.js` — 2 new integration tests (manifesto-on
   overrides curriculum; well-fed bot pursues tools_stone)
 
+### rc.4 (this commit batch) — Paradigm shift: TimeWeb-only LLM + improvement queue
+**What changed**: Pi (CLI subscription) was removed from every
+background loop. The bot's analytical LLM path (`coach/postmortem`,
+`coach/reflect`) now goes through the same TimeWeb endpoint the fast
+advisor already uses. The trigger system was extended with
+emergency conditions (low HP + close hostile, lava under foot)
+that bypass the long cooldown. Every recommendation is persisted to
+SQLite with its outcome, and a deterministic tuner watches the
+stats to flag underperforming triggers. The LLM also writes a
+queue of "structural gaps" — missing skills or features —
+that the operator reviews and implements by hand.
+
+- [`runtime/coach/llm-call.js`](../../runtime/coach/llm-call.js) —
+  shared `askAnalytical()` helper that wraps `runtime/llm/provider.js#complete()`
+  with a longer (30s) timeout suitable for postmortem and reflect.
+- [`runtime/coach/postmortem.js`](../../runtime/coach/postmortem.js):
+  - Drain loop runs through TimeWeb, not Pi CLI
+  - `buildPrompt()` returns `{system, user}` (was a single concatenated string)
+  - Reply schema includes `improvements[]` for missing-skill callouts
+  - `lessons` source is now `timeweb-coach` (was `pi-coach`)
+- [`runtime/coach/reflect.js`](../../runtime/coach/reflect.js) — same
+  treatment. `lessons` source is now `timeweb-reflect`.
+- [`runtime/coach/advisor-trigger.js`](../../runtime/coach/advisor-trigger.js):
+  - **Emergency triggers** added: HP≤6 + hostile≤8b, or lava under foot.
+    Use a much shorter 20s cooldown — wait-on-cooldown would be lethal.
+  - Active need now passed to the LLM so suggestions track the manifesto.
+  - Every recommendation is `insertRecommendation()`-ed; reflex marks
+    `applied=1` when it dispatches, and `outcome_ok` when the skill returns.
+- [`runtime/knowledge/schema.sql`](../../runtime/knowledge/schema.sql):
+  two new tables.
+  - `advisor_recommendations` — ground truth for the LLM trail with
+    full token usage + outcome attribution
+  - `improvement_requests` — operator-facing queue. Dedup by title
+    bumps `votes` instead of inserting duplicates.
+- [`runtime/coach/trigger-tuner.js`](../../runtime/coach/trigger-tuner.js)
+  (new) — hourly: reads 24h of recommendation stats, flags low-success
+  triggers and expensive-prompt-mediocre-payoff cases as
+  `improvement_requests` with `source="tuner"`. No LLM call needed
+  — pure SQL.
+- [`runtime/llm/provider.js`](../../runtime/llm/provider.js):
+  `complete()` now returns `usage: {in, out, total}` and logs
+  `in=Nt/out=Mt` on every call.
+- [`runtime/coach/fast-advisor.js`](../../runtime/coach/fast-advisor.js):
+  `getUsageSnapshot()` aggregates total tokens across the session;
+  surfaces in `scripts/list-improvements.js --stats`.
+- [`scripts/list-improvements.js`](../../scripts/list-improvements.js)
+  (new) — operator CLI. `--status open` (default), `--stats`,
+  `--done <id> [note]`, `--inprogress <id>`, `--reject <id>`,
+  `--source <postmortem|reflect|advisor|tuner|manual>`,
+  `--category <skill|tuning|...>`.
+
+Cost measurement (smoke-test against TimeWeb gpt-5.4-mini):
+  per advise(): ~705 input + 45 output = ~750 tokens
+  rate cap: 6 calls/hour
+  worst case @ full hourly cap: ~108K tokens/day
+  estimated cost (OpenAI gpt-5-mini reference pricing): ~$0.60/month
+
+Tests: 360 green (was 332 on v0.3.0-rc.3, +28 new):
+  +3  abortSignal tests in skills/contract.test.js
+  +13 advisor-trigger tests
+  +4  emergency-trigger tests
+  +4  knowledge-recommendation tests
+  +3  knowledge-improvement tests
+  +2  postmortem/reflect rewrites for TimeWeb path
+  +7  trigger-tuner tests (low success / expensive / healthy / dedup)
+
 ### rc.3 — Event-driven awareness + skill pre-emption
 **Root problem solved**: in v0.2.x the reflex was purely polling. The
 loop took a snapshot every DISPATCH_INTERVAL_MS (~2s) and decided what

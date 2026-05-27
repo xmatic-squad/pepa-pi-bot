@@ -66,6 +66,7 @@ export async function advise({
 	reason = "unknown",
 	recentSkillIds = [],
 	lessonsTail = [],
+	activeNeed = null,
 	force = false,
 } = {}) {
 	if (!isAvailable()) {
@@ -82,7 +83,7 @@ export async function advise({
 	}
 
 	const system = buildSystemPrompt();
-	const user = buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail });
+	const user = buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, activeNeed });
 
 	_callTimes.push(now);
 	_lastCallAt = now;
@@ -163,16 +164,24 @@ function buildSystemPrompt() {
 	].join("\n");
 }
 
-function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail }) {
+function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail, activeNeed }) {
 	const pos = snapshot?.position;
 	const inv = snapshot?.inventory ? Object.keys(snapshot.inventory).slice(0, 10).join(", ") : "(empty)";
 	const recent = (recentSkillIds ?? []).slice(-8).join(" → ") || "(none)";
 	const lessons = (lessonsTail ?? []).slice(0, 4).map((l) => `  - ${l.text ?? l}`).join("\n");
+	const needLine = activeNeed
+		? `L${activeNeed.need.level} ${activeNeed.need.id} (${activeNeed.need.title}) — manifesto wants ${activeNeed.skillId}`
+		: "(no active need)";
+	const hostile = snapshot?.closestHostile
+		? `${snapshot.closestHostile.name}@${snapshot.closestHostile.distance}b`
+		: "(none)";
 
 	return [
 		`Trigger: ${reason}`,
 		`Position: ${pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : "?"}`,
 		`HP: ${snapshot?.health ?? "?"} food: ${snapshot?.food ?? "?"} day: ${snapshot?.isDay ? "yes" : "no"}`,
+		`Active need (Maslow ladder): ${needLine}`,
+		`Closest hostile: ${hostile}`,
 		`Active skill: ${snapshot?.activeSkill ?? "(idle)"}`,
 		`Recent dispatches: ${recent}`,
 		`Inventory keys: ${inv}`,
@@ -181,6 +190,7 @@ function buildUserPrompt({ snapshot, reason, recentSkillIds, lessonsTail }) {
 		"",
 		lessons ? `Relevant lessons:\n${lessons}\n` : "",
 		"What should the bot do RIGHT NOW? Return the JSON decision.",
+		"Prefer a skill that helps satisfy the active need unless an emergency forces another action.",
 	].filter(Boolean).join("\n");
 }
 
