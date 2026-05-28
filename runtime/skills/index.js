@@ -130,6 +130,18 @@ export const RUNNER_CODES = Object.freeze({
 	DONE: "done",
 });
 
+// Signed inventory diff between two count Maps (from InventoryLedger.mark/
+// snapshot). Used to attach the real world change to a skill result.
+function invDiff(before, after) {
+	const out = {};
+	const names = new Set([...(before?.keys?.() ?? []), ...(after?.keys?.() ?? [])]);
+	for (const n of names) {
+		const d = (after?.get?.(n) ?? 0) - (before?.get?.(n) ?? 0);
+		if (d !== 0) out[n] = d;
+	}
+	return out;
+}
+
 function normaliseResult(res, fallbackCode) {
 	const ok = !!res?.ok;
 	return {
@@ -222,6 +234,12 @@ export async function runSkill(id, ctx, args = {}) {
 		return result;
 	}
 
+	// WorldDelta diff layer (research §TL;DR): snapshot the inventory before
+	// execute so we can attach the REAL inventory change to the result and,
+	// for skills that opt in via `expectGain`, assert the claimed gain actually
+	// happened instead of trusting the skill's own bookkeeping.
+	const ledgerBefore = ctx?.ledger?.mark?.() ?? null;
+
 	const timeoutMs = skill.timeoutMs ?? 30_000;
 	let raw;
 	try {
@@ -277,6 +295,31 @@ export async function runSkill(id, ctx, args = {}) {
 			return failed;
 		}
 	}
+	// Closed loop: compare the inventory now vs the pre-execute baseline.
+	if (result.ok && ledgerBefore && ctx?.ledger) {
+		try { if (ctx.bot) ctx.ledger.update(ctx.bot); } catch {}
+		const observed = invDiff(ledgerBefore, ctx.ledger.snapshot());
+		if (Object.keys(observed).length > 0) {
+			result.worldDelta = { ...(result.worldDelta ?? {}), _invObserved: observed };
+		}
+		// Opt-in strict check: the world must show the claimed gain.
+		if (skill.expectGain) {
+			const gain = ctx.ledger.gainedSince(ledgerBefore, skill.expectGain.matcher);
+			if (gain < (skill.expectGain.min ?? 1)) {
+				const failed = {
+					ok: false,
+					code: "world_unchanged",
+					detail: `${id} reported ok but ${skill.expectGain.label ?? "expected items"} did not increase (gain ${gain})`,
+					worldDelta: result.worldDelta,
+				};
+				if (typeof skill.recover === "function") {
+					try { failed.recovery = skill.recover(ctx, failed) ?? null; } catch {}
+				}
+				return failed;
+			}
+		}
+	}
+
 	if (!result.ok && typeof skill.recover === "function") {
 		try {
 			result.recovery = skill.recover(ctx, result) ?? null;

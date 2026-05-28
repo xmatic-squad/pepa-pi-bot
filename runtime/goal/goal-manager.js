@@ -17,6 +17,7 @@
 
 import { SETTLEMENT_CONTRACT } from "./contract.js";
 import { checkInvariants, worldFromSnapshot } from "./invariants.js";
+import { prerequisitesMet } from "./skill-graph.js";
 
 export function createGoalManager({ contract = SETTLEMENT_CONTRACT } = {}) {
 	// Evaluate every milestone; returns the per-milestone invariant status plus
@@ -55,6 +56,14 @@ export function createGoalManager({ contract = SETTLEMENT_CONTRACT } = {}) {
 			suggestedSkill = current._m.suggest(world) ?? null;
 		} catch {
 			suggestedSkill = null;
+		}
+
+		// Annotate the suggestion with skill-graph prerequisite status (Plan4MC).
+		// Observability + a guard surface: if prereqs are unmet the curriculum
+		// chain should already be steering toward them, but we expose the gap.
+		if (suggestedSkill?.skillId) {
+			const pre = prerequisitesMet(suggestedSkill.skillId, world);
+			if (!pre.ok) suggestedSkill = { ...suggestedSkill, blockedBy: pre.missing };
 		}
 
 		const reason = current.urgency > 0 && current.index > unmet[0].index

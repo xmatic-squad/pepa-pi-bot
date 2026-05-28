@@ -59,6 +59,7 @@ import { createScenarioMemory, situationHash } from "./scenario-memory.js";
 import { createOwnedBlocksLedger } from "./owned-blocks.js";
 import { createInventoryLedger } from "./services/inventory-ledger.js";
 import { createMotionService } from "./services/motion.js";
+import { createAntiLoop } from "./anti-loop.js";
 import { initKnowledge } from "./knowledge/index.js";
 import { attach as attachCoach } from "./coach/postmortem.js";
 import { attach as attachReflect } from "./coach/reflect.js";
@@ -109,6 +110,7 @@ const worldJournal = createWorldJournal();
 const scenarioMemory = createScenarioMemory();
 const ownedBlocks = createOwnedBlocksLedger();
 const inventoryLedger = createInventoryLedger();
+const antiLoop = createAntiLoop();
 const goalManager = createGoalManager();
 let motionService = null; // armed on spawn (needs a live bot for pathfinder)
 let lastResult = null; // { label, ok, code, detail, ts }
@@ -138,6 +140,7 @@ const reflexCtx = {
 	metrics: skillMetrics,
 	owned: ownedBlocks,
 	ledger: inventoryLedger,
+	antiLoop,
 	motion: null, // set on spawn alongside the pathfinder watchdog
 };
 
@@ -969,6 +972,40 @@ function tick() {
 		});
 		if (wedged?.fire) {
 			void filePostCritique(wedged, "wedged");
+		}
+
+		// QW5 — anti-loop: a skill that failed ≥3× in 5 min is blacklisted by
+		// the detector; here we turn each fired loop into an improvement_request
+		// so the operator/Codex gets a concrete ticket instead of silent thrash.
+		for (const loop of antiLoop.drainFired()) {
+			try {
+				writeProposal({
+					kind: `anti-loop-${loop.skillId}`,
+					summary: `${loop.skillId} looped ${loop.count}× in 5min (last code=${loop.code ?? "?"})`,
+					body: [
+						`# Anti-loop: ${loop.skillId}`,
+						``,
+						`The same skill failed ${loop.count} times within 5 minutes with no success`,
+						`in between, so it has been blacklisted until ${new Date(loop.until).toISOString()}.`,
+						``,
+						`- skill: ${loop.skillId}`,
+						loop.targetKey ? `- target: ${loop.targetKey}` : `- target: (none)`,
+						`- last failure code: ${loop.code ?? "?"}`,
+						`- runtime state: ${lastSnapshot.runtimeState ?? "?"}`,
+						`- no-progress reason: ${lastSnapshot.noProgressReason ?? "?"}`,
+						`- position: ${JSON.stringify(lastSnapshot.position ?? null)}`,
+						`- milestone: ${lastSnapshot.contract?.milestone?.id ?? lastSnapshot.currentMilestone ?? "?"}`,
+						``,
+						`## Suggested fix`,
+						`Either the skill's preconditions are too loose (it keeps being chosen`,
+						`when it cannot succeed here) or it needs a real recovery branch. Inspect`,
+						`runtime/skills/${loop.skillId.split(".").pop()}*.js and the scheduler path.`,
+					].join("\n"),
+					editScope: ["runtime/skills/", "runtime/reflex.js", "runtime/modes.js"],
+				});
+			} catch (e) {
+				warn("anti-loop", `writeProposal failed: ${e?.message ?? e}`);
+			}
 		}
 
 		ipc?.broadcast(EVENT_TYPES.STATUS, lastSnapshot);

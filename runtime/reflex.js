@@ -712,6 +712,14 @@ function curriculumReflex(ctx) {
 		}
 	}
 
+	// QW5 anti-loop: this skill failed ≥3× in 5 min → it's blacklisted. Skip
+	// and nudge toward exploration so we leave the situation that loops it.
+	if (ctx.antiLoop?.shouldSkip(skillId)) {
+		ctx.skillBackoff = ctx.skillBackoff ?? {};
+		ctx.skillBackoff["__wander_hint__"] = Date.now() + SKILL_BACKOFF_MS;
+		return { action: "noop", kind: "anti-loop-blacklisted", label: skillId };
+	}
+
 	// v0.2.0 — consult learned lessons. If a high-confidence lesson says
 	// "avoid <skillId> in this situation", swap to its preferred
 	// alternative (or back off entirely if no safe alternative is named).
@@ -734,6 +742,9 @@ function curriculumReflex(ctx) {
 	ctx.dispatch(() => runSkill(dispatchSkillId, ctx, dispatchArgs), dispatchSkillId, {
 		onComplete: (res) => {
 			ctx.skillBackoff = ctx.skillBackoff ?? {};
+			// QW5 anti-loop bookkeeping: feed every outcome so repeated failures
+			// of the same skill get detected, blacklisted and ticketed.
+			ctx.antiLoop?.record({ skillId: dispatchSkillId, ok: !!res?.ok, code: res?.code ?? null });
 			if (advice.lessonId) reportAdviceOutcome({ lessonId: advice.lessonId, succeeded: !!res?.ok });
 			if (appliedRecommendationId) {
 				markRecommendationOutcome(appliedRecommendationId, {
