@@ -39,7 +39,15 @@ export function attach({ intervalMs = TUNE_INTERVAL_MS } = {}) {
 		return;
 	}
 	_timer = setInterval(() => {
-		runOnce().catch((e) => warn("tuner", `tick err: ${e?.message ?? e}`));
+		// runOnce is synchronous (pure SQL, no await) — must NOT call
+		// .catch on its plain-object return. A try/catch here is the
+		// correct guard. (This exact bug crashed the live bot after
+		// ~1h uptime when the first tuner tick fired.)
+		try {
+			runOnce();
+		} catch (e) {
+			warn("tuner", `tick err: ${e?.message ?? e}`);
+		}
 	}, intervalMs);
 	_timer.unref?.();
 	info("tuner", `attached; tune every ${Math.round(intervalMs / 60000)} min`);
