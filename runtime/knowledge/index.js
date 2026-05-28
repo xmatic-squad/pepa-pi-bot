@@ -334,16 +334,28 @@ export function createImprovementRequest({
 } = {}) {
 	if (!_isAvailable() || !title) return null;
 	try {
-		// Dedup: if an open request with same title (case-insensitive) exists,
-		// bump its votes instead of inserting a new row.
-		const dup = _getStore().prepare(`
-			SELECT id, votes FROM improvement_requests
-			WHERE LOWER(title) = LOWER(?) AND status = 'open'
-			ORDER BY ts DESC LIMIT 1
-		`).get(title);
-		if (dup) {
-			_getStore().prepare(`UPDATE improvement_requests SET votes = votes + 1 WHERE id = ?`).run(dup.id);
-			return dup.id;
+		// Fuzzy dedup: the LLM re-files the same gap with reworded titles
+		// ("целевого поиска еды" vs "целевого дальнего поиска еды по биому").
+		// Exact-title match misses these, so we compare normalized token
+		// sets against ALL recent requests (any status — a closed/
+		// implemented one shouldn't reappear as a fresh open row). On a
+		// strong overlap we bump votes (if still open) and return, instead
+		// of inserting a near-duplicate.
+		const incoming = tokenize(title);
+		const candidates = _getStore().prepare(`
+			SELECT id, title, status, votes FROM improvement_requests
+			ORDER BY ts DESC LIMIT 60
+		`).all();
+		for (const c of candidates) {
+			if (isDuplicateTitle(incoming, tokenize(c.title))) {
+				// Re-flagged gap. If it's still open, count the vote. If it
+				// was implemented/rejected, do NOT resurrect it — just
+				// return its id so the caller treats it as "already known".
+				if (c.status === "open") {
+					_getStore().prepare(`UPDATE improvement_requests SET votes = votes + 1 WHERE id = ?`).run(c.id);
+				}
+				return c.id;
+			}
 		}
 		const res = _getStore().prepare(`
 			INSERT INTO improvement_requests
@@ -412,7 +424,48 @@ export function markImprovementStatus(id, { status, notes } = {}) {
 
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, Number(n) || lo)); }
 
+// Normalize a title into a set of meaningful tokens for fuzzy dedup.
+// Lowercase, strip punctuation, drop short / stop words (RU + EN) that
+// carry no signal ("нет", "навыка", "для", "the", "a", …).
+const _STOP = new Set([
+	"нет", "навык", "навыка", "для", "из", "по", "в", "на", "и", "с", "к",
+	"когда", "нужно", "это", "что", "the", "a", "an", "to", "of", "for",
+	"no", "skill", "has", "is", "low", "rate",
+]);
+function tokenize(s) {
+	if (!s || typeof s !== "string") return new Set();
+	const words = s.toLowerCase()
+		.replace(/["'`(),.:;!?\/\\-]+/g, " ")
+		.split(/\s+/)
+		.filter((w) => w.length >= 3 && !_STOP.has(w));
+	return new Set(words);
+}
+function jaccard(a, b) {
+	if (a.size === 0 || b.size === 0) return 0;
+	let inter = 0;
+	for (const w of a) if (b.has(w)) inter++;
+	return inter / (a.size + b.size - inter);
+}
+function intersectionSize(a, b) {
+	let n = 0;
+	for (const w of a) if (b.has(w)) n++;
+	return n;
+}
+// Two titles are "the same gap" when they either overlap very strongly
+// (jaccard ≥ 0.75) OR share at least 3 meaningful tokens with moderate
+// overlap (≥ 0.5). The 3-token floor stops short titles with one or two
+// generic words in common ("low-prio thing" vs "high-prio thing") from
+// false-matching, while still catching reworded long titles.
+function isDuplicateTitle(a, b) {
+	const j = jaccard(a, b);
+	if (j >= 0.75) return true;
+	return intersectionSize(a, b) >= 3 && j >= 0.5;
+}
+
 function safeParse(s) {
 	if (!s) return null;
 	try { return JSON.parse(s); } catch { return null; }
 }
+
+// Test exports
+export const __testing = { tokenize, jaccard, isDuplicateTitle };

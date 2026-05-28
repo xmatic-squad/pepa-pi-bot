@@ -122,9 +122,18 @@ function alivePursue(s) {
 	return null;
 }
 
+// SATED_FOOD — above this hunger level the bot is NOT hungry; chasing
+// food (scout/acquire) is wasted motion. The bot should keep working
+// toward wood/tools/shelter and pick up food opportunistically. It
+// only becomes a hard need again when the bar drops below this.
+const SATED_FOOD = 14;
+
 function foodDetect(s) {
 	if (!s?.connected) return true;
-	if ((s.food ?? 20) >= 18 && countAny(s.inventory, FOOD_ITEMS) >= 1) return true;
+	// Comfortable hunger bar → treat L1 as satisfied even with an empty
+	// food inventory. (Was: required 6+ food items, which made a sated
+	// bot loop scout/acquire-food for hours doing nothing else.)
+	if ((s.food ?? 20) >= SATED_FOOD) return true;
 	return countAny(s.inventory, FOOD_ITEMS) >= 6;
 }
 

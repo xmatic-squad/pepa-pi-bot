@@ -232,16 +232,17 @@ export const STORYLINE = Object.freeze([
 		title: "Найти первую еду",
 		narration_ru: "Нужна еда — ищу корову, курицу или ягоды.",
 		completed(snap) {
-			return countAny(snap?.inventory, FOOD_ITEMS) >= 2;
+			// Done if we have a stock (≥2 food items) OR the hunger bar is
+			// comfortable (≥14). A sated bot should be chopping wood, not
+			// chasing a chicken it doesn't need — it'll grab food
+			// opportunistically when one wanders close.
+			if (countAny(snap?.inventory, FOOD_ITEMS) >= 2) return true;
+			if ((snap?.food ?? 20) >= 14) return true;
+			return false;
 		},
 		suggestSkill(snap) {
-			// Two-tier strategy:
-			//  - If a passive food mob is visible nearby (≤24 blocks in
-			//    snapshot), kill it locally with acquire-food.
-			//  - Otherwise scout-food does long-range biome-aware search.
-			//    It commits to a cardinal for ~200 blocks, rescans, and
-			//    on biome boundary detection heads toward food-capable
-			//    terrain.
+			// Only reached when the bot is actually hungry (food < 14) and
+			// has no stock. Local mob → acquire-food; else long-range scout.
 			if (hasLocalFoodMob(snap)) return { skillId: "survive.acquire-food" };
 			return { skillId: "survive.scout-food" };
 		},

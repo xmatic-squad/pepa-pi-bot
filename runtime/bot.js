@@ -946,6 +946,25 @@ function tick() {
 function startTickLoop() {
 	if (tickTimer) clearInterval(tickTimer);
 	tickTimer = setInterval(tick, config.tickIntervalMs);
+	startPerfBufferReaper();
+}
+
+// mineflayer + mineflayer-pathfinder emit performance.mark/measure
+// entries that accumulate in the global perf_hooks buffer with no
+// upper bound. Over a multi-hour run this grew past 1,000,000 entries
+// ("MaxPerformanceEntryBufferExceededWarning") and is a prime suspect
+// for the overnight OOM. We don't consume those entries, so clear the
+// buffer on a slow interval.
+let perfReaperTimer = null;
+function startPerfBufferReaper() {
+	if (perfReaperTimer) return;
+	perfReaperTimer = setInterval(() => {
+		try {
+			performance.clearMeasures?.();
+			performance.clearMarks?.();
+		} catch {}
+	}, 60_000);
+	perfReaperTimer.unref?.();
 }
 
 // ---- IPC commands ----------------------------------------------------------

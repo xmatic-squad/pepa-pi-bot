@@ -73,10 +73,14 @@ test("step first_tools: requires all three wood tools", () => {
 	assert.equal(s.completed(snap({ inventory: { stone_pickaxe: 1, stone_axe: 1, stone_sword: 1 } })), true);
 });
 
-test("step first_food: completed at ≥2 food items", () => {
+test("step first_food: completed at ≥2 food items, OR when sated (food≥14)", () => {
 	const s = getStep("first_food");
-	assert.equal(s.completed(snap()), false);
-	assert.equal(s.completed(snap({ inventory: { bread: 2 } })), true);
+	// hungry + no food → not done
+	assert.equal(s.completed(snap({ food: 8 })), false);
+	// hungry + 2 food items → done (have a stock)
+	assert.equal(s.completed(snap({ food: 8, inventory: { bread: 2 } })), true);
+	// sated (food≥14) + no food → done (don't chase food while full)
+	assert.equal(s.completed(snap({ food: 17 })), true);
 });
 
 test("step first_food: local hunt only for edible passive mobs within acquire range", () => {
