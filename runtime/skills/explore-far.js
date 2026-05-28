@@ -90,16 +90,6 @@ export const skill = Object.freeze({
 		}
 		info("action", `explore.far: cardinal probe trials=${trials.map((t) => `${t.name}:${t.dist.toFixed(1)}`).join(" ")} best=${best.name}`);
 
-		const probeMoved = horizontalDistance(beforeProbe, bot.entity.position);
-		if (probeMoved >= 2) {
-			return {
-				ok: true,
-				code: "done",
-				detail: { mode: "probe-moved", dir: best.name, moved: probeMoved },
-				worldDelta: { movedTo: clonePos(bot.entity.position) },
-			};
-		}
-
 		if (best.dist < 0.5) {
 			// All cardinals blocked. Try the cheap vertical escape first; if it
 			// does not actually move us, carve a short horizontal tunnel. The
@@ -122,7 +112,8 @@ export const skill = Object.freeze({
 		return blindWalkOrTunnelOut(bot, {
 			yaw: best.yaw,
 			dirName: best.name,
-			blindMs: args.blindMs ?? 7_000,
+			blindMs: args.blindMs ?? 20_000,
+			minMove: args.minMove ?? Math.min(14, Math.max(8, dist * 0.25)),
 			tunnelPushMs: args.tunnelPushMs,
 			reason: `explore.far blind ${best.name}`,
 			intended: { x: tx, y: ty, z: tz },
@@ -130,7 +121,7 @@ export const skill = Object.freeze({
 	},
 });
 
-async function blindWalkOrTunnelOut(bot, { yaw, dirName, blindMs = 7_000, minMove = 0.75, tunnelPushMs, reason = "blind fallback", intended = null } = {}) {
+export async function blindWalkOrTunnelOut(bot, { yaw, dirName, blindMs = 7_000, minMove = 0.75, tunnelPushMs, reason = "blind fallback", intended = null } = {}) {
 	const before = clonePos(bot.entity.position);
 	try { await bot.look(yaw, 0, true); } catch {}
 	bot.setControlState("forward", true);

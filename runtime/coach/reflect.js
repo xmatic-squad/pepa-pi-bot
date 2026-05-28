@@ -18,6 +18,7 @@ import { resolve } from "node:path";
 import { isAvailable as knowledgeAvailable, record as recordLesson, createImprovementRequest } from "../knowledge/index.js";
 import { isRegistered, skillRegistryPrompt } from "../skill-registry.js";
 import { pickActiveNeed } from "../manifesto/state.js";
+import { pickCurrentStep } from "../goal/state.js";
 import { isAvailable as llmAvailable } from "../llm/provider.js";
 import { askAnalytical } from "./llm-call.js";
 import { info, warn } from "../log.js";
@@ -81,8 +82,9 @@ export async function runOnce({ stateDir, getSnapshot, force = false, askAnalyti
 	const diary = readDiaryTail(stateDir);
 	const plan = readPlan(stateDir);
 	const activeNeed = pickActiveNeed(snap);
+	const storyStep = pickCurrentStep(snap);
 
-	const { system, user } = buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed });
+	const { system, user } = buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed, storyStep });
 	_llmCallTimes.push(now);
 
 	const parsed = await askAnalyticalFn({ system, user, json: true });
@@ -172,13 +174,16 @@ function readPlan(stateDir) {
 	try { return readFileSync(f, "utf8"); } catch { return ""; }
 }
 
-function buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed }) {
+function buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed, storyStep }) {
 	const pos = snap?.position;
 	const inv = snap?.inventory ? Object.keys(snap.inventory).slice(0, 12).join(", ") : "(empty)";
 	const lastResult = snap?.lastResult ? JSON.stringify(snap.lastResult).slice(0, 200) : "(none)";
 	const needLine = activeNeed
 		? `L${activeNeed.need.level} ${activeNeed.need.id} → ${activeNeed.skillId} (${activeNeed.need.title})`
 		: "(satisfied through L10 / no active need)";
+	const storyLine = storyStep
+		? `step ${storyStep.index + 1}/11 '${storyStep.step.id}' — ${storyStep.step.title}${storyStep.suggestion?.skillId ? ` (wants ${storyStep.suggestion.skillId})` : ""}${storyStep.emergency ? " [EMERGENCY PAUSE]" : ""}`
+		: "(no current step)";
 
 	const system = [
 		"You are pepa, an autonomous Minecraft survival bot, reflecting on your own progress.",
@@ -216,6 +221,7 @@ function buildPrompt({ snap, journal, scenarios, diary, plan, activeNeed }) {
 		`- hp: ${snap?.health ?? "?"} food: ${snap?.food ?? "?"} day: ${snap?.isDay ? "yes" : "no"}`,
 		`- runtimeState: ${snap?.runtimeState ?? "?"}`,
 		`- activeSkill: ${snap?.activeSkill ?? "(idle)"}`,
+		`- storylineStep: ${storyLine}`,
 		`- activeNeed (Maslow ladder L0-L10): ${needLine}`,
 		`- currentMilestone: ${snap?.currentMilestone ?? "?"}`,
 		`- noProgressReason: ${snap?.noProgressReason ?? "(none)"}`,

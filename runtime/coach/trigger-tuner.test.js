@@ -6,9 +6,30 @@ import { join } from "node:path";
 
 import { initKnowledge, isAvailable, listImprovements } from "../knowledge/index.js";
 import { closeStore, __resetForTests } from "../knowledge/store.js";
-import { runOnce, __testing } from "./trigger-tuner.js";
+import { runOnce, attach, detach, __testing } from "./trigger-tuner.js";
 
 const { MIN_SAMPLE } = __testing;
+
+test("attach: timer tick does not crash (runOnce is sync, regression for .catch bug)", async () => {
+	// Reproduces the crash that killed the live bot after ~1h: the
+	// setInterval body called runOnce().catch(...) but runOnce returns
+	// a plain object, not a Promise. attach must guard with try/catch.
+	detach();
+	let threw = false;
+	const origSetInterval = globalThis.setInterval;
+	let captured = null;
+	// capture the interval callback without actually waiting
+	globalThis.setInterval = (fn) => { captured = fn; return { unref() {} }; };
+	try {
+		attach({ intervalMs: 999999 });
+		// invoke the captured tick synchronously — must not throw
+		try { captured?.(); } catch { threw = true; }
+	} finally {
+		globalThis.setInterval = origSetInterval;
+		detach();
+	}
+	assert.equal(threw, false, "tuner timer tick must not throw");
+});
 
 async function bootstrap() {
 	const tmp = mkdtempSync(join(tmpdir(), "pepa-tuner-test-"));

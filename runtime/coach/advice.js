@@ -21,10 +21,13 @@ const SAFE_OVERRIDES = new Set([
 	"survive.flee",
 	"survive.sleep",
 	"survive.eat",
+	"survive.acquire-food",
+	"survive.scout-food",
 	"survive.pillar-up",
 	"recovery.tunnel-out",
 	"explore.far",
 	"explore.wander",
+	"village.relocate",
 	"village.build-shelter",
 	"village.choose-base",
 ]);
@@ -45,6 +48,9 @@ const MODE_TO_SKILL = Object.freeze({
 	"tunnel-out": "recovery.tunnel-out",
 	explore: "explore.far",
 	wander: "explore.far",
+	scout_food: "survive.scout-food",
+	"scout-food": "survive.scout-food",
+	relocate: "village.relocate",
 });
 
 function normalisePreferSkill(raw) {

@@ -115,6 +115,8 @@ test("normalisePreferSkill: 'survive_flee' shape gets translated to dot form", (
 test("normalisePreferSkill: passes through known dot-form skills unchanged", () => {
 	assert.equal(normalisePreferSkill("survive.flee"), "survive.flee");
 	assert.equal(normalisePreferSkill("explore.far"), "explore.far");
+	assert.equal(normalisePreferSkill("survive.scout-food"), "survive.scout-food");
+	assert.equal(normalisePreferSkill("village.relocate"), "village.relocate");
 });
 
 test("normalisePreferSkill: unknown values rejected (returns null)", () => {

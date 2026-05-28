@@ -34,13 +34,27 @@ const PREEMPT_WINDOW_MS = 30_000;
 const EMERGENCY_HP = 6;
 const EMERGENCY_HOSTILE_DIST = 8;
 const EMERGENCY_COOLDOWN_MS = 20_000;
+// LLM outage backoff — if 3 consecutive advise() calls return
+// http_400 / network_error, suppress further calls for 10 minutes.
+const PROVIDER_OUTAGE_FAILS = 3;
+const PROVIDER_OUTAGE_BACKOFF_MS = 10 * 60 * 1000;
 
 let _lastTriggerAt = 0;
 let _inFlight = false;
+let _consecutiveFails = 0;
+let _providerOutageUntil = 0;
 
 export function _resetForTest() {
 	_lastTriggerAt = 0;
 	_inFlight = false;
+	_consecutiveFails = 0;
+	_providerOutageUntil = 0;
+}
+
+function isProviderError(code) {
+	return code === "network_error"
+		|| code === "timeout"
+		|| (typeof code === "string" && code.startsWith("http_"));
 }
 
 export function getTriggerState() {
@@ -63,6 +77,9 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 	if (_inFlight) return { fired: false, reason: "in_flight" };
 
 	const now = Date.now();
+	if (_providerOutageUntil > now) {
+		return { fired: false, reason: "provider_outage", retryAt: _providerOutageUntil };
+	}
 
 	// Drop a recommendation that's already aged out.
 	if (ctx.advisorRecommendation && now - ctx.advisorRecommendation.at > RECOMMENDATION_TTL_MS) {
@@ -85,10 +102,11 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 	const snapshot = ctx.snapshot ?? null;
 	const recentSkillIds = (ctx.recentSkillIds ?? []).slice(-8);
 	const activeNeed = ctx.activeNeed ?? null;
+	const storyStep = ctx.storyStep ?? null;
 
-	info("advisor-trigger", `firing because ${reason} (planned=${plannedSkillId ?? "?"}, need=${activeNeed?.need?.id ?? "?"})`);
+	info("advisor-trigger", `firing because ${reason} (planned=${plannedSkillId ?? "?"}, need=${activeNeed?.need?.id ?? "?"}, step=${storyStep?.step?.id ?? "?"})`);
 	// Fire-and-forget. The promise's resolution writes ctx.advisorRecommendation.
-	advise({ snapshot, reason, recentSkillIds, lessonsTail: ctx.recentLessons ?? [], activeNeed, force: true })
+	advise({ snapshot, reason, recentSkillIds, lessonsTail: ctx.recentLessons ?? [], activeNeed, storyStep, force: true })
 		.then((result) => {
 			_inFlight = false;
 			const needLabel = activeNeed
@@ -141,6 +159,15 @@ export function tickAdvisor(ctx, { plannedSkillId } = {}) {
 				info("advisor-trigger", `recommendation: ${result.action} (${result.latencyMs}ms)`);
 			} else if (!result.ok) {
 				warn("advisor-trigger", `advise failed: ${result.code} (${result.detail})`);
+				if (isProviderError(result.code)) {
+					_consecutiveFails += 1;
+					if (_consecutiveFails >= PROVIDER_OUTAGE_FAILS) {
+						_providerOutageUntil = Date.now() + PROVIDER_OUTAGE_BACKOFF_MS;
+						warn("advisor-trigger", `LLM provider outage (${_consecutiveFails} fails in a row); backing off ${Math.round(PROVIDER_OUTAGE_BACKOFF_MS / 60000)}min`);
+					}
+				}
+			} else {
+				_consecutiveFails = 0;
 			}
 		})
 		.catch((e) => {

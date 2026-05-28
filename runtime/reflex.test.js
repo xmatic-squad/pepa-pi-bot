@@ -51,6 +51,8 @@ function makeCtx({
 	                          // runtime/manifesto/state.test.js separately.
 	disableAdvisor = true,   // advisor-trigger fires real async LLM calls,
 	                          // tested directly in advisor-trigger.test.js.
+	disableStoryline = true, // storyline tested in goal/storyline.test.js
+	disableWedge = true,     // wedge tested in awareness/wedge-detector.test.js
 } = {}) {
 	const dispatches = [];
 	const ctx = {
@@ -65,6 +67,8 @@ function makeCtx({
 		metrics,
 		disableManifesto,
 		disableAdvisor,
+		disableStoryline,
+		disableWedge,
 		dispatch(fn, label, opts = {}) {
 			dispatches.push({ fn, label, opts });
 		},
@@ -240,9 +244,10 @@ test("curriculum dispatches suggested skill by id", () => {
 	assert.ok(typeof dispatches[0].opts.onComplete === "function");
 });
 
-test("manifesto: hungry bot with no food drives survive.acquire-food (overrides curriculum plan)", () => {
+test("manifesto: hungry bot with no visible food drives survive.scout-food (manifesto fallback when storyline disabled)", () => {
 	const { ctx, dispatches } = makeCtx({
 		disableManifesto: false,
+		disableStoryline: true,
 		snapshot: {
 			connected: true,
 			health: 20,
@@ -258,8 +263,64 @@ test("manifesto: hungry bot with no food drives survive.acquire-food (overrides 
 	});
 	const out = runTick(ctx);
 	assert.equal(out.reflex, "curriculum");
-	assert.equal(dispatches[0].label, "survive.acquire-food", "manifesto L1 food took over");
+	assert.equal(dispatches[0].label, "survive.scout-food", "manifesto L1 food took over");
 	assert.equal(ctx.activeNeed?.need?.id, "food");
+});
+
+test("L0 manifesto emergency: defend/modes layer catches the threat BEFORE curriculum", () => {
+	// HP=4 + creeper@3m fires `modes` (self_preservation) or defendReflex
+	// before curriculum even runs — which is the right outcome: alive
+	// emergencies don't reach the storyline/manifesto branch at all.
+	const { ctx, dispatches } = makeCtx({
+		disableManifesto: false,
+		disableStoryline: false,
+		bot: { entities: { z1: { name: "creeper", height: 1.7, position: { x: 3, y: 64, z: 0, distanceTo: () => 3 } } }, entity: { position: { x: 0, y: 64, z: 0 } } },
+		snapshot: {
+			connected: true,
+			health: 4,
+			food: 12,
+			hasFood: false,
+			inventory: { oak_log: 10 },
+			equipment: {},
+			nearbyBlocks: { logs: 4 },
+			hazards: { footBlock: "grass_block", belowBlock: "dirt", headBlock: "air" },
+			closestHostile: { name: "creeper", distance: 3 },
+			threats: [{ name: "creeper", distance: 3, position: { x: 3, y: 64, z: 0 } }],
+			isDay: true,
+			curriculum: { plan: { skillId: "gather.logs" } },
+		},
+	});
+	const out = runTick(ctx);
+	assert.notEqual(out?.kind, "curriculum-skill", "an upstream reflex caught the emergency before curriculum");
+});
+
+test("storyline beats manifesto L1+ when both have suggestions", () => {
+	// Snapshot: well-fed (food=20 + 8 bread → manifesto L1 satisfied, L2
+	// tools_wood unmet) AND storyline orient_self complete (HP=20, blocks
+	// visible). Storyline should drive a wood-tier crafting step, not
+	// manifesto's gather.logs (which would also be valid but less concrete).
+	const { ctx, dispatches } = makeCtx({
+		disableManifesto: false,
+		disableStoryline: false,
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			hasFood: true,
+			inventory: { bread: 8, oak_log: 10 }, // logs done, no planks
+			equipment: {},
+			nearbyBlocks: { logs: 3 },
+			hazards: { footBlock: "grass_block", belowBlock: "dirt", headBlock: "air" },
+			isDay: true,
+			_sessionMs: 60_000,
+			curriculum: { plan: { skillId: "explore.far" } },
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	// Storyline step crafting_basics suggests craft.planks (10 logs, no planks yet).
+	assert.equal(dispatches[0].label, "craft.planks");
+	assert.equal(ctx.storyStep?.step?.id, "crafting_basics");
 });
 
 test("manifesto: well-fed bot with all wood tools defers to curriculum plan", () => {

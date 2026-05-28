@@ -8,6 +8,7 @@ const { pathfinder, goals, Movements } = pathfinderPkg;
 
 import { info, warn } from "../log.js";
 import { foods } from "./groups.js";
+import { blindWalkOrTunnelOut } from "./explore-far.js";
 
 const PASSIVE_FOOD_MOBS = new Set(["cow", "pig", "chicken", "sheep", "rabbit", "mooshroom"]);
 
@@ -59,6 +60,41 @@ function nearbyDroppedItems(bot, maxDistance = 8) {
 		.map((e) => ({ entity: e, distance: e.position.distanceTo(here) }))
 		.filter((e) => e.distance <= maxDistance)
 		.sort((a, b) => a.distance - b.distance);
+}
+
+function horizontalDistance(a, b) {
+	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+}
+
+function yawToward(from, to) {
+	if (!from || !to) return null;
+	const dx = to.x - from.x;
+	const dz = to.z - from.z;
+	if (Math.hypot(dx, dz) < 0.5) return null;
+	return -Math.atan2(dx, dz);
+}
+
+async function fallbackApproachFoodMob(bot, target, err) {
+	try { bot.pathfinder?.stop?.(); } catch {}
+	const start = bot.entity.position.clone?.() ?? { ...bot.entity.position };
+	const alreadyMoved = horizontalDistance(start, bot.entity.position);
+	if (alreadyMoved >= 4) {
+		return { ok: true, moved: alreadyMoved, mode: "pathfinder_partial", error: err?.message ?? "path failed" };
+	}
+	const yaw = yawToward(bot.entity.position, target.entity.position);
+	if (yaw === null) return { ok: false, moved: 0, error: err?.message ?? "path failed" };
+	const blind = await blindWalkOrTunnelOut(bot, {
+		yaw,
+		dirName: `toward-${target.entity.name}`,
+		blindMs: 8_000,
+		minMove: 4,
+		reason: `acquire-food target ${target.entity.name}`,
+	});
+	const moved = horizontalDistance(start, bot.entity.position);
+	if (blind.ok || moved >= 4) {
+		return { ok: true, moved, mode: "blind_target", error: err?.message ?? "path failed" };
+	}
+	return { ok: false, moved, error: err?.message ?? "path failed" };
 }
 
 async function pickupNearbyDrops(bot) {
@@ -115,7 +151,18 @@ export const skill = Object.freeze({
 				"pathToFoodMob",
 			);
 		} catch (e) {
-			return { ok: false, code: "no_path", detail: e.message, worldDelta: null };
+			const approached = await fallbackApproachFoodMob(bot, target, e);
+			const current = Object.values(bot.entities ?? {}).find((entity) => entity.id === target.entity.id);
+			const dist = current?.position?.distanceTo(bot.entity.position) ?? Infinity;
+			if (!approached.ok) return { ok: false, code: "no_path", detail: e.message, worldDelta: null };
+			if (dist > 4) {
+				return {
+					ok: false,
+					code: "approached_target",
+					detail: { target: target.entity.name, moved: Math.round(approached.moved), mode: approached.mode, error: approached.error },
+					worldDelta: { moved: Math.round(approached.moved), target: target.entity.name, mode: approached.mode },
+				};
+			}
 		}
 
 		info("action", `survive.acquire-food: hunting ${target.entity.name} (${target.distance.toFixed(1)}m)`);
@@ -153,11 +200,11 @@ export const skill = Object.freeze({
 		}
 	},
 	recover(ctx, result) {
-		if (result.code === "no_target" || result.code === "no_path") {
-			return { hint: "wander", reason: "need to search for passive food mobs" };
+		if (result.code === "no_target" || result.code === "no_path" || result.code === "approached_target" || result.code === "no_drop") {
+			return { hint: "scout-food", reason: "need a long-range food search, not local acquire-food retry" };
 		}
 		return null;
 	},
 });
 
-export const _internal = { foodCount, nearestPassiveFoodMob };
+export const _internal = { foodCount, nearestPassiveFoodMob, yawToward, horizontalDistance };

@@ -94,6 +94,7 @@ let _last = {
 	threatHostile: null,
 	dayPart: null,
 	noProgressReason: null,
+	storyStepId: null,
 };
 let _lastNarrationAt = 0;
 let _narrationTimes = [];
@@ -164,6 +165,15 @@ function tick() {
 		_last.noProgressReason = snap.noProgressReason;
 	}
 
+	// 4b. Storyline step transition — narrate the *narration_ru* line
+	// straight from runtime/goal/storyline.js when the step changes.
+	// This is the bot speaking about its current quest concretely.
+	const story = snap.storyStep ?? null;
+	if (story?.step?.id && story.step.id !== _last.storyStepId && story.step.narration_ru) {
+		maybeNarrateRaw(story.step.narration_ru);
+		_last.storyStepId = story.step.id;
+	}
+
 	// 5. Milestone done — fires when activeSkill flips to noop and lastResult.ok
 	const last = snap.lastResult;
 	if (last?.ok && last?.code === "done") {
@@ -200,13 +210,19 @@ function inferDayPart(snap) {
 }
 
 function maybeNarrate(key) {
+	const line = pickLine(key);
+	if (!line) return;
+	maybeNarrateRaw(line);
+}
+
+function maybeNarrateRaw(line) {
+	if (!line) return;
 	const now = Date.now();
 	const hourAgo = now - 3600_000;
 	_narrationTimes = _narrationTimes.filter((t) => t > hourAgo);
 	if (now - _lastNarrationAt < MIN_GAP_MS) return;
 	if (_narrationTimes.length >= MAX_PER_HOUR) return;
-	const line = pickLine(key);
-	if (!line) return;
+	if (line === _lastTemplate) return;
 	const ok = sendChat(line);
 	if (ok) {
 		_lastNarrationAt = now;

@@ -54,11 +54,36 @@ test("L0 alive: zero food and have food → eat", () => {
 	assert.equal(n.pursue(s).skillId, "survive.eat");
 });
 
-test("L0 alive: zero food and no food → acquire", () => {
+test("L0 alive: zero food and no visible target → scout-food", () => {
 	const n = getNeed("alive");
 	const s = snap({ food: 0, hasFood: false });
 	assert.equal(n.detect(s), false);
+	assert.equal(n.pursue(s).skillId, "survive.scout-food");
+});
+
+test("L0 alive: zero food with visible passive → acquire", () => {
+	const n = getNeed("alive");
+	const s = snap({
+		food: 0,
+		hasFood: false,
+		nearbyEntities: { passives: [{ name: "cow", distance: 12 }], droppedItems: [] },
+	});
+	assert.equal(n.detect(s), false);
 	assert.equal(n.pursue(s).skillId, "survive.acquire-food");
+});
+
+test("L0 alive: far or non-food passives do not trigger local acquire", () => {
+	const n = getNeed("alive");
+	assert.equal(n.pursue(snap({
+		food: 0,
+		hasFood: false,
+		nearbyEntities: { passives: [{ name: "chicken", distance: 51 }], droppedItems: [] },
+	})).skillId, "survive.scout-food");
+	assert.equal(n.pursue(snap({
+		food: 0,
+		hasFood: false,
+		nearbyEntities: { passives: [{ name: "cod", distance: 12 }], droppedItems: [] },
+	})).skillId, "survive.scout-food");
 });
 
 test("L1 food: 6+ food items → satisfied", () => {
@@ -71,6 +96,13 @@ test("L1 food: full saturation + any food → satisfied (no panic gathering)", (
 	const n = getNeed("food");
 	// food=20 means belly is full; 3 bread is enough until we get hungry again
 	assert.equal(n.detect(snap({ food: 20, inventory: { bread: 3 } })), true);
+});
+
+test("L1 food: no local food target uses scout-food instead of local acquire loop", () => {
+	const n = getNeed("food");
+	const s = snap({ food: 10, hasFood: false, inventory: {} });
+	assert.equal(n.detect(s), false);
+	assert.equal(n.pursue(s).skillId, "survive.scout-food");
 });
 
 test("L2 tools_wood: starts with no logs → gather.logs", () => {
@@ -105,6 +137,7 @@ test("L2 tools_wood: progression to pickaxe → axe → sword", () => {
 test("L3 shelter_basic: bed nearby → satisfied", () => {
 	const n = getNeed("shelter_basic");
 	assert.equal(n.detect(snap({ nearbyBlocks: { beds: 1 } })), true);
+	assert.equal(n.detect(snap({ nearbyBlocks: { beds: { count: 1 } } })), true);
 	assert.equal(n.detect(snap({ inventory: { red_bed: 1 } })), true);
 	assert.equal(n.detect(snap()), false);
 });
@@ -169,6 +202,7 @@ test("L8 armor_iron: iron_chestplate equipped → satisfied", () => {
 test("L9 village_seed: bed + storage nearby → satisfied", () => {
 	const n = getNeed("village_seed");
 	assert.equal(n.detect(snap({ nearbyBlocks: { beds: 1, storage: 1 } })), true);
+	assert.equal(n.detect(snap({ nearbyBlocks: { beds: { count: 1 }, storage: { count: 1 } } })), true);
 });
 
 test("L9 village_seed: no chest → craft.chest if enough planks", () => {

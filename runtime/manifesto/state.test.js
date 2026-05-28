@@ -30,14 +30,20 @@ test("pickActiveNeed: fresh spawn → L0 alive if zero food", () => {
 	_resetForTest();
 	const a = pickActiveNeed(snap({ food: 0 }));
 	assert.equal(a.need.id, "alive");
-	assert.equal(a.skillId, "survive.acquire-food");
+	assert.equal(a.skillId, "survive.scout-food");
 });
 
-test("pickActiveNeed: hp ok, no food in inventory → L1 food (acquire)", () => {
+test("pickActiveNeed: hungry (food<14), no food in inventory → L1 food (scout)", () => {
+	_resetForTest();
+	const a = pickActiveNeed(snap({ food: 8 }));
+	assert.equal(a.need.id, "food");
+	assert.equal(a.skillId, "survive.scout-food");
+});
+
+test("pickActiveNeed: sated (food=20) + empty inventory → skips L1, goes to L2 tools_wood", () => {
 	_resetForTest();
 	const a = pickActiveNeed(snap());
-	assert.equal(a.need.id, "food");
-	assert.equal(a.skillId, "survive.acquire-food");
+	assert.equal(a.need.id, "tools_wood", "sated bot works toward tools, not chasing food");
 });
 
 test("pickActiveNeed: food covered → L2 tools_wood (gather logs)", () => {
@@ -103,7 +109,7 @@ test("pickActiveNeed: hostile imminent + low HP → L0 takes over", () => {
 
 test("describeActiveNeed: returns 'L<n> <id> → <skill>'", () => {
 	_resetForTest();
-	const s = describeActiveNeed(snap());
+	const s = describeActiveNeed(snap({ food: 8 }));
 	assert.match(s, /^L1 food → /);
 });
 

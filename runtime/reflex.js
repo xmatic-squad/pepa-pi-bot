@@ -29,6 +29,8 @@ import { consult as consultAdvice, reportOutcome as reportAdviceOutcome } from "
 import { tickAdvisor, consumeFreshRecommendation } from "./coach/advisor-trigger.js";
 import { markRecommendationApplied, markRecommendationOutcome } from "./knowledge/index.js";
 import { pickActiveNeed } from "./manifesto/state.js";
+import { pickCurrentStep } from "./goal/state.js";
+import { observe as observeWedge, isWedged } from "./awareness/wedge-detector.js";
 import { situationHash } from "./scenario-memory.js";
 import { tickModes } from "./modes.js";
 
@@ -373,6 +375,39 @@ function metricRecoverySkill(ctx, plannedSkillId) {
 	return null;
 }
 
+function checkSkillPreconditions(ctx, skillId, args = {}) {
+	const skill = getSkill(skillId);
+	if (!skill) return { ok: false, code: "unknown_skill", detail: skillId };
+	try {
+		return skill.preconditions(ctx, args) ?? { ok: true };
+	} catch (e) {
+		return { ok: false, code: "precondition_failed", detail: e?.message ?? String(e) };
+	}
+}
+
+function resolveAdvisorSkill(ctx, rec, currentSkillId) {
+	if (!rec?.skillId) return null;
+	const pre = checkSkillPreconditions(ctx, rec.skillId);
+	if (pre.ok) return rec.skillId;
+
+	// The most common stale/under-specified advice is "switch to local
+	// acquire-food" when no passive mob exists in the entity horizon.
+	// Treat that as the broader food-search intent and route to scout-food.
+	if (rec.skillId === "survive.acquire-food" && pre.code === "no_target") {
+		const scoutPre = checkSkillPreconditions(ctx, "survive.scout-food");
+		if (scoutPre.ok) {
+			info(REFLEX_LOG, `advisor correction: ${rec.skillId} has no local target; using survive.scout-food`);
+			return "survive.scout-food";
+		}
+	}
+
+	info(
+		REFLEX_LOG,
+		`advisor ignored: ${currentSkillId} → ${rec.skillId} failed preconditions (${pre.code}: ${String(pre.detail ?? "").slice(0, 80)})`,
+	);
+	return null;
+}
+
 // v0.2.0-rc.3 — wedged-emergency escape. When the bot has not made
 // meaningful horizontal progress for ≥ 60s AND there's no immediate
 // hostile (defendReflex would have handled it) AND a placeable block
@@ -441,6 +476,10 @@ function curriculumReflex(ctx) {
 	const plan = s.curriculum?.plan;
 	const wanderHintUntil = ctx.skillBackoff?.["__wander_hint__"] ?? 0;
 	const wantWander = wanderHintUntil && Date.now() < wanderHintUntil;
+	const scoutFoodHintUntil = ctx.skillBackoff?.["__scout_food_hint__"] ?? 0;
+	const wantScoutFood = scoutFoodHintUntil && Date.now() < scoutFoodHintUntil;
+	const relocateHintUntil = ctx.skillBackoff?.["__relocate_hint__"] ?? 0;
+	const wantRelocate = relocateHintUntil && Date.now() < relocateHintUntil;
 
 	// v0.3.0-rc.2 — manifesto layer. Walk the L0-L10 needs ladder; the
 	// lowest unsatisfied need dictates the planned skill. The curriculum
@@ -457,6 +496,38 @@ function curriculumReflex(ctx) {
 		ctx.activeNeed = activeNeed;
 	}
 	const manifestoSkillId = activeNeed?.skillId ?? null;
+
+	// v0.3.1 — wedge detector. Feeds position into rolling-bbox tracker.
+	// When bot has been stuck in a <50-block bbox for 10 minutes with
+	// the same need cycling its skills, returns wedged=true and we
+	// short-circuit to village.relocate which walks 300 blocks in a
+	// fresh cardinal. Tests pass ctx.disableWedge=true to skip.
+	if (!ctx.disableWedge && s.position) {
+		observeWedge({
+			x: s.position.x, z: s.position.z,
+			activeNeedId: activeNeed?.need?.id ?? null,
+			recentSkillIds: ctx.recentSkillIds ?? [],
+		});
+		const wedge = isWedged({
+			activeNeedId: activeNeed?.need?.id ?? null,
+			recentSkillIds: ctx.recentSkillIds ?? [],
+		});
+		if (wedge.wedged) {
+			ctx.lastCurriculumAt = Date.now();
+			info(REFLEX_LOG, `wedged: bbox=${Math.round(wedge.bboxDim)}b need=${activeNeed?.need?.id} for ${Math.round(wedge.needAgeMs / 1000)}s → village.relocate`);
+			ctx.dispatch(() => runSkill("village.relocate", ctx), "village.relocate", {});
+			return { action: "dispatched", kind: "wedge-relocate", label: "village.relocate" };
+		}
+	}
+
+	// v0.3.1 — storyline: the canonical Minecraft survival quest. Gives
+	// the bot a concrete, narratable next-action ("collect 8 logs",
+	// "place crafting table"). Storyline yields to manifesto on L0
+	// alive emergencies but otherwise its suggestion is preferred over
+	// the curriculum plan when it picks a registered skill.
+	const storyStep = ctx.disableStoryline ? null : pickCurrentStep(s);
+	if (storyStep) ctx.storyStep = storyStep;
+	const storySkillId = (storyStep && !storyStep.emergency && storyStep.suggestion?.skillId) ? storyStep.suggestion.skillId : null;
 	const metricRecovery = metricRecoverySkill(ctx, plan?.skillId);
 	if (metricRecovery) {
 		ctx.lastCurriculumAt = Date.now();
@@ -491,11 +562,29 @@ function curriculumReflex(ctx) {
 		}
 	}
 
+	if (wantRelocate || wantScoutFood) {
+		ctx.lastCurriculumAt = Date.now();
+		ctx.skillBackoff = ctx.skillBackoff ?? {};
+		const hintSkillId = wantRelocate ? "village.relocate" : "survive.scout-food";
+		const hintKey = wantRelocate ? "__relocate_hint__" : "__scout_food_hint__";
+		ctx.skillBackoff[hintKey] = 0;
+		const pre = checkSkillPreconditions(ctx, hintSkillId);
+		if (pre.ok) {
+			ctx.dispatch(() => runSkill(hintSkillId, ctx), hintSkillId, {});
+			return {
+				action: "dispatched",
+				kind: wantRelocate ? "curriculum-recovery-relocate" : "curriculum-recovery-scout-food",
+				label: hintSkillId,
+			};
+		}
+		info(REFLEX_LOG, `recovery hint ${hintSkillId} skipped (${pre.code}: ${String(pre.detail ?? "").slice(0, 80)})`);
+	}
+
 	// No skill plan from curriculum OR a recent skill asked us to wander.
 	// First hint → small wander (might just be 32-block reach issue).
 	// Every subsequent hint while still inside the backoff window → use
 	// explore.far so the bot actually leaves the patch it's stuck in.
-	if ((!plan?.skillId && !manifestoSkillId) || wantWander) {
+	if ((!plan?.skillId && !manifestoSkillId && !storySkillId) || wantWander) {
 		ctx.lastCurriculumAt = Date.now();
 		const fallbackId = wantWander && consecutiveWanderHints >= 1 ? "explore.far" : "wander";
 		// v0.2.0-rc.3 — consult advice on the FALLBACK dispatch too. Without
@@ -530,10 +619,29 @@ function curriculumReflex(ctx) {
 		return { action: "dispatched", kind: "curriculum-wander", label: "wander" };
 	}
 
-	// Pick what to dispatch: manifesto wins over curriculum plan because
-	// it expresses concrete needs rather than abstract "next milestone".
-	let skillId = manifestoSkillId ?? plan.skillId;
-	let skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
+	// Pick what to dispatch. Order:
+	//   1. manifesto L0 (alive emergencies: low HP near hostile, lava
+	//      under foot, food=0) — absolute priority; do NOT let
+	//      storyline overrule a "you're dying" signal.
+	//   2. storyline — concrete narrative subgoal ("collect 8 logs",
+	//      "craft wooden pickaxe"). Beats manifesto L1+ because the
+	//      ladder needs operational direction, not just "you need food
+	//      → dispatch acquire-food forever".
+	//   3. manifesto L1+ — fallback when storyline has no concrete
+	//      pursue (e.g. armor levels with pursue=null).
+	//   4. curriculum plan — legacy fallback.
+	const manifestoEmergency = activeNeed?.need?.level === 0;
+	let skillId, skillSource;
+	if (manifestoEmergency) {
+		skillId = manifestoSkillId ?? storySkillId ?? plan.skillId;
+		skillSource = `manifesto:${activeNeed.need.id}`;
+	} else if (storySkillId) {
+		skillId = storySkillId;
+		skillSource = `storyline:${storyStep.step.id}`;
+	} else {
+		skillId = manifestoSkillId ?? plan.skillId;
+		skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
+	}
 
 	// v0.3.0 fast-advisor: if a fresh recommendation is sitting on ctx
 	// (the result of a previous tick's async advise() call), use it.
@@ -542,11 +650,16 @@ function curriculumReflex(ctx) {
 	if (!ctx.disableAdvisor) {
 		const rec = consumeFreshRecommendation(ctx);
 		if (rec && rec.skillId) {
-			info(REFLEX_LOG, `advisor override: ${skillId} → ${rec.skillId} (${rec.triggerReason}, ${rec.rationale?.slice(0, 60)})`);
-			skillId = rec.skillId;
-			skillSource = `advisor:${rec.triggerReason}`;
-			appliedRecommendationId = rec.id ?? null;
-			if (appliedRecommendationId) markRecommendationApplied(appliedRecommendationId);
+			const resolved = resolveAdvisorSkill(ctx, rec, skillId);
+			if (resolved) {
+				info(REFLEX_LOG, `advisor override: ${skillId} → ${resolved} (${rec.triggerReason}, ${rec.rationale?.slice(0, 60)})`);
+				skillId = resolved;
+				skillSource = `advisor:${rec.triggerReason}`;
+				appliedRecommendationId = rec.id ?? null;
+				if (appliedRecommendationId) markRecommendationApplied(appliedRecommendationId);
+			} else if (rec.id) {
+				markRecommendationOutcome(rec.id, { ok: false, code: "precondition_failed" });
+			}
 		}
 		// Always fire-and-forget another advise() if triggers fire — the
 		// result lands on a future tick. tickAdvisor handles its own
@@ -618,6 +731,14 @@ function curriculumReflex(ctx) {
 				// log" — switch to exploration for a minute.
 				ctx.skillBackoff["__wander_hint__"] = Date.now() + SKILL_BACKOFF_MS;
 				consecutiveWanderHints++;
+			}
+			if (res?.recovery?.hint === "scout-food") {
+				ctx.skillBackoff[dispatchSkillId] = Date.now() + SKILL_BACKOFF_MS;
+				ctx.skillBackoff["__scout_food_hint__"] = Date.now() + SKILL_BACKOFF_MS;
+			}
+			if (res?.recovery?.hint === "relocate") {
+				ctx.skillBackoff[dispatchSkillId] = Date.now() + SKILL_BACKOFF_MS;
+				ctx.skillBackoff["__relocate_hint__"] = Date.now() + SKILL_BACKOFF_MS;
 			}
 			if (!res?.ok) {
 				// missing_tool / missing_material / no_target shouldn't be

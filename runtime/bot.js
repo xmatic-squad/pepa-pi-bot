@@ -63,6 +63,7 @@ import { attach as attachReflect } from "./coach/reflect.js";
 import { attach as attachTuner } from "./coach/trigger-tuner.js";
 import { attach as attachChatter } from "./persona/chatter.js";
 import { attachAwareness } from "./awareness/events.js";
+import { pickCurrentStep } from "./goal/state.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -79,6 +80,7 @@ const ESCALATE_AFTER_NOOPS = 20;
 const ESCALATION_COOLDOWN_MS = 10 * 60 * 1000;
 
 let bot = null;
+let botSpawnedAt = 0;
 let pathWatchdog = null;
 let awarenessState = null;
 let reflexPaused = false;
@@ -676,6 +678,7 @@ function connect() {
 	reflexCtx.bot = bot;
 
 	bot.once("spawn", () => {
+		botSpawnedAt = Date.now();
 		info("mc", `spawned at ${JSON.stringify(bot.entity.position)}`);
 		appendDiary(`spawned at ${bot.entity.position.x.toFixed(0)},${bot.entity.position.y.toFixed(0)},${bot.entity.position.z.toFixed(0)}`);
 		ipc?.broadcast(EVENT_TYPES.STATUS, buildSnapshot(bot));
@@ -844,6 +847,13 @@ function tick() {
 		}
 		const curriculumEarly = nextCurriculumMilestone(lastSnapshot);
 		lastSnapshot.curriculum = curriculumEarly;
+		// Time since spawn — used by storyline orient_self to fall through
+		// when bot is in a barren biome that never produces "saw blocks".
+		lastSnapshot._sessionMs = botSpawnedAt ? Date.now() - botSpawnedAt : 0;
+		// Storyline current step — surfaced in snapshot so chatter and
+		// other observers can react to step transitions without
+		// re-importing the picker.
+		try { lastSnapshot.storyStep = pickCurrentStep(lastSnapshot); } catch {}
 		reflexCtx.snapshot = lastSnapshot;
 		if (!reflexPaused) {
 			const result = runTick(reflexCtx);
@@ -936,6 +946,25 @@ function tick() {
 function startTickLoop() {
 	if (tickTimer) clearInterval(tickTimer);
 	tickTimer = setInterval(tick, config.tickIntervalMs);
+	startPerfBufferReaper();
+}
+
+// mineflayer + mineflayer-pathfinder emit performance.mark/measure
+// entries that accumulate in the global perf_hooks buffer with no
+// upper bound. Over a multi-hour run this grew past 1,000,000 entries
+// ("MaxPerformanceEntryBufferExceededWarning") and is a prime suspect
+// for the overnight OOM. We don't consume those entries, so clear the
+// buffer on a slow interval.
+let perfReaperTimer = null;
+function startPerfBufferReaper() {
+	if (perfReaperTimer) return;
+	perfReaperTimer = setInterval(() => {
+		try {
+			performance.clearMeasures?.();
+			performance.clearMarks?.();
+		} catch {}
+	}, 60_000);
+	perfReaperTimer.unref?.();
 }
 
 // ---- IPC commands ----------------------------------------------------------

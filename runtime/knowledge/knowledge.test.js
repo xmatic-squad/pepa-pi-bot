@@ -320,6 +320,42 @@ test("improvement requests: create, dedup-by-title bumps votes, list filters", a
 	assert.ok(!stillOpen.some((r) => r.id === id1));
 });
 
+test("improvement requests: fuzzy dedup catches reworded titles + won't resurrect closed ones", async () => {
+	await bootstrap();
+	if (!isAvailable()) return;
+	const a = createImprovementRequest({
+		source: "postmortem", category: "skill",
+		title: "Нет навыка целевого поиска еды по биому", priority: 1,
+	});
+	assert.ok(a);
+	// Reworded near-duplicate — should map to the SAME row, bump votes.
+	const b = createImprovementRequest({
+		source: "reflect", category: "skill",
+		title: "Нет навыка целевого дальнего поиска еды по биому", priority: 1,
+	});
+	assert.equal(b, a, "reworded title deduped to original");
+
+	// Mark it implemented, then the LLM re-files the same gap reworded
+	// again — must NOT create a fresh open row (no resurrection).
+	markImprovementStatus(a, { status: "implemented", notes: "scout-food" });
+	const c = createImprovementRequest({
+		source: "reflect", category: "skill",
+		title: "Нужен навык дальнего поиска еды по биому", priority: 1,
+	});
+	assert.equal(c, a, "re-filed closed gap returns existing id, no new row");
+	const open = listImprovements({ status: "open" });
+	assert.ok(!open.some((r) => r.id === a), "closed gap stays closed");
+});
+
+test("tokenize / jaccard: similarity helpers", async () => {
+	const { tokenize, jaccard } = (await import("./index.js")).__testing;
+	const t1 = tokenize("Нет навыка целевого поиска еды по биому");
+	const t2 = tokenize("Нет навыка целевого дальнего поиска еды по биому");
+	assert.ok(jaccard(t1, t2) >= 0.6, `expected ≥0.6, got ${jaccard(t1, t2)}`);
+	const t3 = tokenize("Trigger wedged_96s has low success rate");
+	assert.ok(jaccard(t1, t3) < 0.3, "unrelated titles score low");
+});
+
 test("improvement requests: priority and status ordering", async () => {
 	await bootstrap();
 	if (!isAvailable()) return;
