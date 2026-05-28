@@ -53,6 +53,7 @@ function makeCtx({
 	                          // tested directly in advisor-trigger.test.js.
 	disableStoryline = true, // storyline tested in goal/storyline.test.js
 	disableWedge = true,     // wedge tested in awareness/wedge-detector.test.js
+	disableContract = true,  // contract path tested below + goal-manager.test.js
 } = {}) {
 	const dispatches = [];
 	const ctx = {
@@ -69,6 +70,7 @@ function makeCtx({
 		disableAdvisor,
 		disableStoryline,
 		disableWedge,
+		disableContract,
 		dispatch(fn, label, opts = {}) {
 			dispatches.push({ fn, label, opts });
 		},
@@ -546,4 +548,66 @@ test("onComplete sets per-skill backoff on cooldown-class failures", () => {
 	const cb = dispatches[0].opts.onComplete;
 	cb({ ok: false, code: "missing_tool", detail: "no pickaxe" });
 	assert.ok((ctx.skillBackoff?.["gather.stone"] ?? 0) > Date.now());
+});
+
+// ---- v0.4.0 Settlement Contract integration --------------------------------
+
+test("contract suggestion drives dispatch (beats curriculum plan)", () => {
+	const { ctx, dispatches } = makeCtx({
+		disableContract: false,
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			isDay: true,
+			// curriculum (legacy) would say gather.logs; the contract says farm.
+			curriculum: { plan: { skillId: "gather.logs" } },
+			contract: {
+				done: false,
+				milestone: { id: "M9_farm", title: "Start a wheat farm" },
+				suggestedSkill: { skillId: "farm.wheat" },
+			},
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	assert.equal(dispatches[0].label, "farm.wheat");
+	assert.equal(out.source, "contract:M9_farm");
+});
+
+test("contract dispatches even when curriculum plan is exhausted (no wander)", () => {
+	const { ctx, dispatches } = makeCtx({
+		disableContract: false,
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			isDay: true,
+			curriculum: null, // curriculum exhausted
+			contract: {
+				done: false,
+				milestone: { id: "M9_farm", title: "Start a wheat farm" },
+				suggestedSkill: { skillId: "farm.wheat" },
+			},
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(dispatches[0].label, "farm.wheat");
+});
+
+test("contract done → falls through to wander when nothing else suggests", () => {
+	const { ctx, dispatches } = makeCtx({
+		disableContract: false,
+		snapshot: {
+			connected: true,
+			health: 20,
+			food: 20,
+			isDay: true,
+			curriculum: null,
+			contract: { done: true, milestone: null, suggestedSkill: null },
+		},
+	});
+	const out = runTick(ctx);
+	assert.equal(out.reflex, "curriculum");
+	assert.equal(dispatches[0].label, "wander");
 });

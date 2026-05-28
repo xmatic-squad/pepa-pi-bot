@@ -528,6 +528,18 @@ function curriculumReflex(ctx) {
 	const storyStep = ctx.disableStoryline ? null : pickCurrentStep(s);
 	if (storyStep) ctx.storyStep = storyStep;
 	const storySkillId = (storyStep && !storyStep.emergency && storyStep.suggestion?.skillId) ? storyStep.suggestion.skillId : null;
+
+	// v0.4.0 — Settlement Contract is the unified progression authority,
+	// replacing the storyline rail (which competed with the manifesto). It is
+	// precomputed in bot.js (snapshot.contract) via the GoalManager: lowest
+	// unmet milestone, with food-urgency utility preemption. Manifesto L0
+	// (alive emergencies) still preempts it; storyline/curriculum remain as
+	// fallbacks when the contract is disabled (tests) or has no suggestion.
+	const contractGoal = ctx.disableContract ? null : (s.contract ?? null);
+	if (contractGoal) ctx.contractGoal = contractGoal;
+	const contractSkillId = (contractGoal && !contractGoal.done && contractGoal.suggestedSkill?.skillId)
+		? contractGoal.suggestedSkill.skillId
+		: null;
 	const metricRecovery = metricRecoverySkill(ctx, plan?.skillId);
 	if (metricRecovery) {
 		ctx.lastCurriculumAt = Date.now();
@@ -584,7 +596,7 @@ function curriculumReflex(ctx) {
 	// First hint → small wander (might just be 32-block reach issue).
 	// Every subsequent hint while still inside the backoff window → use
 	// explore.far so the bot actually leaves the patch it's stuck in.
-	if ((!plan?.skillId && !manifestoSkillId && !storySkillId) || wantWander) {
+	if ((!plan?.skillId && !manifestoSkillId && !storySkillId && !contractSkillId) || wantWander) {
 		ctx.lastCurriculumAt = Date.now();
 		const fallbackId = wantWander && consecutiveWanderHints >= 1 ? "explore.far" : "wander";
 		// v0.2.0-rc.3 — consult advice on the FALLBACK dispatch too. Without
@@ -633,13 +645,16 @@ function curriculumReflex(ctx) {
 	const manifestoEmergency = activeNeed?.need?.level === 0;
 	let skillId, skillSource;
 	if (manifestoEmergency) {
-		skillId = manifestoSkillId ?? storySkillId ?? plan.skillId;
+		skillId = manifestoSkillId ?? contractSkillId ?? storySkillId ?? plan?.skillId;
 		skillSource = `manifesto:${activeNeed.need.id}`;
+	} else if (contractSkillId) {
+		skillId = contractSkillId;
+		skillSource = `contract:${contractGoal.milestone.id}`;
 	} else if (storySkillId) {
 		skillId = storySkillId;
 		skillSource = `storyline:${storyStep.step.id}`;
 	} else {
-		skillId = manifestoSkillId ?? plan.skillId;
+		skillId = manifestoSkillId ?? plan?.skillId;
 		skillSource = manifestoSkillId ? `manifesto:${activeNeed.need.id}` : "curriculum";
 	}
 

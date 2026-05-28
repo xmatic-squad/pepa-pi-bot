@@ -149,16 +149,16 @@ function StatusHeader({ snapshot, connectedIpc, width, startedAt }: { snapshot: 
 	const day = snapshot.isDay ? "☀" : "🌙";
 	const session = formatDuration(Date.now() - startedAt);
 	const mcOnline = snapshot.connected;
-	const story = snapshot.storyStep;
-	const idx = story?.index ?? 0;
-	const cur = story?.step;
-	const want = story?.suggestion?.skillId;
-	// 11-step progress bar in 11 cells
-	const bar = Array.from({ length: 11 }, (_, i) => {
-		if (i < idx) return "▓";
-		if (i === idx) return "▒";
-		return "░";
-	}).join("");
+	// v0.4.0 — the Settlement Contract is the progression authority. Show its
+	// milestone, completed/total, suggested skill and the Village Score.
+	const contract = snapshot.contract;
+	const vs = snapshot.villageScore;
+	const cdone = contract?.completed ?? 0;
+	const ctotal = contract?.total ?? 0;
+	const cbar = Array.from({ length: ctotal || 10 }, (_, i) => (i < cdone ? "▓" : "░")).join("");
+	const cmile = contract?.milestone;
+	const cwant = contract?.suggestedSkill?.skillId;
+	const vspct = vs ? Math.round(vs.score * 100) : null;
 	return (
 		<Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} width={width}>
 			<Box>
@@ -188,25 +188,32 @@ function StatusHeader({ snapshot, connectedIpc, width, startedAt }: { snapshot: 
 				) : null}
 			</Box>
 			<Box>
-				<Text color="magenta">story </Text>
-				<Text bold>{bar}</Text>
+				<Text color="magenta">build </Text>
+				<Text bold>{cbar}</Text>
 				<Text dimColor> </Text>
-				<Text bold>{idx + 1}/11</Text>
+				<Text bold>{cdone}/{ctotal}</Text>
 				<Text dimColor> </Text>
-				{cur ? (
+				{contract?.done ? (
+					<Text color="green" bold>settlement complete</Text>
+				) : cmile ? (
 					<>
-						<Text color="white" bold>{cur.id}</Text>
+						<Text color="white" bold>{cmile.id}</Text>
 						<Text dimColor> · </Text>
-						<Text>{cur.title}</Text>
+						<Text>{cmile.title}</Text>
 					</>
-				) : <Text dimColor>(no story)</Text>}
-				{want ? (
+				) : <Text dimColor>(no contract)</Text>}
+				{cwant ? (
 					<>
 						<Text dimColor> → </Text>
-						<Text color="cyan">{want}</Text>
+						<Text color="cyan">{cwant}</Text>
 					</>
 				) : null}
-				{story?.emergency ? <Text color="red" bold> [EMERGENCY]</Text> : null}
+				{vspct != null ? (
+					<>
+						<Text dimColor> · </Text>
+						<Text color="yellow">VS {vspct}%</Text>
+					</>
+				) : null}
 			</Box>
 		</Box>
 	);
@@ -445,7 +452,7 @@ function App() {
 
 	// Layout math: compact 4-section vertical stack.
 	// row budget:
-	//   header (story + status) ≈ 4 rows
+	//   header (contract/build + status) ≈ 4 rows
 	//   middle activity/chat     ≈ floor((rows - 4 - 4 - 4) / 2)
 	//   bottom advisor/improvements ≈ same
 	//   footer ≈ 4 rows
