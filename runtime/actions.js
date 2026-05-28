@@ -143,7 +143,30 @@ export async function attackNearest(bot, hostileType) {
 
 // ---- flee ------------------------------------------------------------------
 
-export async function fleeFrom(bot, fromEntity, distance = 16) {
+async function blindRetreat(bot, dirYaw, blindMs = 7_000) {
+	const before = bot.entity.position.clone?.() ?? { ...bot.entity.position };
+	try { bot.pathfinder?.stop?.(); } catch {}
+	try { await bot.look(dirYaw, 0, true); } catch {}
+	bot.setControlState("forward", true);
+	bot.setControlState("jump", true);
+	try {
+		await new Promise((r) => setTimeout(r, blindMs));
+	} finally {
+		bot.setControlState("forward", false);
+		bot.setControlState("jump", false);
+	}
+	const after = bot.entity.position;
+	const moved = Math.hypot(after.x - before.x, after.z - before.z);
+	return { moved, after };
+}
+
+// v0.4.0 — when a MotionService is supplied (opts.motion), retreat via
+// gotoSafe: a 12s wall-clock with a 4s progress watchdog returns a STRUCTURED
+// {stuck|timeout|nopath} fast instead of hanging the full 30s that we observed
+// live (zombie pinning the bot, every flee timing out, watchdog burning 3
+// replans). On any non-reached result we fall straight through to the blind
+// retreat. Callers without a motion service keep the legacy 30s path.
+export async function fleeFrom(bot, fromEntity, distance = 16, opts = {}) {
 	ensurePathfinder(bot);
 	const from = fromEntity?.position ?? bot.entity.position;
 	const here = bot.entity.position;
@@ -154,50 +177,62 @@ export async function fleeFrom(bot, fromEntity, distance = 16) {
 	const tx = Math.round(here.x + (dx / len) * distance);
 	const tz = Math.round(here.z + (dz / len) * distance);
 	const ty = Math.round(here.y);
+	const dirYaw = -Math.atan2(dx / len, dz / len);
+	const blindMs = opts.blindMs ?? 7_000;
 	info("action", `flee: from=${fromEntity?.name ?? "?"} → ${tx},${ty},${tz}`);
 
 	// canDig:true here is deliberate — without it the bot gets permanently
 	// stuck in dense tree canopy (observed live: bot perched at Y=85 inside
 	// dark-oak leaves, every flee timed out for hours). We accept the risk of
 	// chopping through scenery while panicking; it's how a player would react.
-	const movements = new Movements(bot);
-	movements.canDig = true;
-	movements.allow1by1towers = false;
-	bot.pathfinder.setMovements(movements);
+	try {
+		const movements = new Movements(bot);
+		movements.canDig = true;
+		movements.allow1by1towers = false;
+		bot.pathfinder.setMovements(movements);
+	} catch {
+		// fake/registry-less bot (tests) — skip movement tuning
+	}
+
+	const goal = new goals.GoalNear(tx, ty, tz, 1);
+
+	if (opts.motion?.gotoSafe) {
+		const res = await opts.motion.gotoSafe(goal, {
+			timeoutMs: opts.timeoutMs ?? 12_000,
+			stuckWindowMs: 4_000,
+			stuckDelta: 1.5,
+			label: `flee(${fromEntity?.name})`,
+		});
+		if (res.ok) return { ok: true, detail: { to: { x: tx, y: ty, z: tz }, moved: res.movedBlocks } };
+		warn("action", `flee gotoSafe → ${res.code} (moved ${res.movedBlocks}b); blind retreat`);
+		const b = await blindRetreat(bot, dirYaw, blindMs);
+		if (b.moved >= 4) {
+			return { ok: true, detail: { to: { x: Math.round(b.after.x), y: Math.round(b.after.y), z: Math.round(b.after.z) }, mode: "blind-retreat", moved: b.moved } };
+		}
+		return { ok: false, code: res.code, detail: `flee ${res.code} then blind retreat moved ${b.moved.toFixed(2)}b` };
+	}
 
 	try {
 		await withTimeout(
-			bot.pathfinder.goto(new goals.GoalNear(tx, ty, tz, 1)),
+			bot.pathfinder.goto(goal),
 			30_000,
 			`fleeFrom(${fromEntity?.name})`,
 		);
 		return { ok: true, detail: { to: { x: tx, y: ty, z: tz } } };
 	} catch (e) {
 		warn("action", `flee path failed: ${e.message}; trying blind retreat`);
-		const before = bot.entity.position.clone?.() ?? { ...bot.entity.position };
-		try { bot.pathfinder?.stop?.(); } catch {}
-		try { await bot.look(-Math.atan2(dx / len, dz / len), 0, true); } catch {}
-		bot.setControlState("forward", true);
-		bot.setControlState("jump", true);
-		try {
-			await new Promise((r) => setTimeout(r, 7_000));
-		} finally {
-			bot.setControlState("forward", false);
-			bot.setControlState("jump", false);
-		}
-		const after = bot.entity.position;
-		const moved = Math.hypot(after.x - before.x, after.z - before.z);
-		if (moved >= 4) {
+		const b = await blindRetreat(bot, dirYaw, blindMs);
+		if (b.moved >= 4) {
 			return {
 				ok: true,
 				detail: {
-					to: { x: Math.round(after.x), y: Math.round(after.y), z: Math.round(after.z) },
+					to: { x: Math.round(b.after.x), y: Math.round(b.after.y), z: Math.round(b.after.z) },
 					mode: "blind-retreat",
-					moved,
+					moved: b.moved,
 				},
 			};
 		}
-		warn("action", `flee blind retreat moved only ${moved.toFixed(2)} blocks`);
+		warn("action", `flee blind retreat moved only ${b.moved.toFixed(2)} blocks`);
 		return { ok: false, detail: e.message };
 	}
 }

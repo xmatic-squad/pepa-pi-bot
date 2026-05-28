@@ -39,6 +39,28 @@ function foodCount(bot) {
 	return bot.inventory.items().reduce((sum, item) => allowed.has(item.name) ? sum + item.count : sum, 0);
 }
 
+// Success here is "did edible food actually enter the inventory". Trusting the
+// `playerCollect` event or `nearestEntity` going away is what produced the live
+// `no_drop` false-failures (research §A.4). When the InventoryLedger is wired
+// (ctx.ledger) we verify by diff against a baseline; otherwise we fall back to
+// a local before/after count so the skill still works in unit tests.
+function makeFoodTracker(ctx, bot) {
+	const isFood = (name) => foods(bot).has(name);
+	if (ctx?.ledger) {
+		ctx.ledger.update(bot);
+		const base = ctx.ledger.mark();
+		return {
+			mode: "ledger",
+			gained() {
+				ctx.ledger.update(bot);
+				return ctx.ledger.gainedSince(base, isFood);
+			},
+		};
+	}
+	const before = foodCount(bot);
+	return { mode: "count", gained: () => foodCount(bot) - before };
+}
+
 function nearestPassiveFoodMob(bot, maxDistance = 32) {
 	const here = bot?.entity?.position;
 	if (!here) return null;
@@ -127,15 +149,16 @@ export const skill = Object.freeze({
 	},
 	async execute(ctx) {
 		const bot = ctx.bot;
-		const before = foodCount(bot);
+		const track = makeFoodTracker(ctx, bot);
 
 		const picked = await pickupNearbyDrops(bot);
-		if (foodCount(bot) > before) {
+		const dropGain = track.gained();
+		if (dropGain > 0) {
 			return {
 				ok: true,
 				code: "done",
-				detail: { source: "drop", picked },
-				worldDelta: { acquiredFood: foodCount(bot) - before, source: "drop" },
+				detail: { source: "drop", picked, verify: track.mode },
+				worldDelta: { acquiredFood: dropGain, source: "drop" },
 			};
 		}
 
@@ -184,15 +207,15 @@ export const skill = Object.freeze({
 			}
 			await new Promise((r) => setTimeout(r, 1_000));
 			await pickupNearbyDrops(bot);
-			const after = foodCount(bot);
-			if (after <= before) {
+			const huntGain = track.gained();
+			if (huntGain <= 0) {
 				return { ok: false, code: "no_drop", detail: `hunted ${target.entity.name} but found no edible drop`, worldDelta: null };
 			}
 			return {
 				ok: true,
 				code: "done",
-				detail: { source: "hunt", mob: target.entity.name, gained: after - before },
-				worldDelta: { acquiredFood: after - before, source: "hunt", mob: target.entity.name },
+				detail: { source: "hunt", mob: target.entity.name, gained: huntGain, verify: track.mode },
+				worldDelta: { acquiredFood: huntGain, source: "hunt", mob: target.entity.name },
 			};
 		} catch (e) {
 			warn("action", `survive.acquire-food failed: ${e.message}`);

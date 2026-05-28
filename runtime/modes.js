@@ -138,3 +138,28 @@ registerMode({
 		return { action: { skillId: "survive.sleep" }, detail: { reason: "night with bed in hand" } };
 	},
 });
+
+// QW8 — displaced at night with no bed: dig in for cover instead of standing
+// in the open getting shot. Fires only when night_shelter can't (no bed) and
+// no hostile is already in melee (self_preservation owns that). Requires a
+// placeable cap block; survive.dig-in's preconditions enforce dig safety.
+registerMode({
+	name: "dusk_dig_in",
+	description: "Night, no bed, exposed → dig a hole and cap it",
+	interrupts: ["curriculum"],
+	update(ctx) {
+		const snap = ctx?.snapshot;
+		if (!snap || snap.isDay !== false) return null; // only on explicit night
+		if (ctx.modeCooldown?.dusk_dig_in && Date.now() < ctx.modeCooldown.dusk_dig_in) return null;
+		const inv = snap.inventory || {};
+		if (Object.keys(inv).some((n) => /_bed$/.test(n))) return null; // night_shelter handles beds
+		// Only when actually exposed at night and away from a known shelter.
+		const sheltered = !!snap.locations?.shelter || snap.hazards?.headBlock && snap.hazards.headBlock !== "air";
+		if (sheltered) return null;
+		const hasCap = Object.keys(inv).some((n) => /(_planks|_log|cobble|stone|dirt|sand|gravel|netherrack)$/i.test(n));
+		if (!hasCap) return null;
+		ctx.modeCooldown = ctx.modeCooldown ?? {};
+		ctx.modeCooldown.dusk_dig_in = Date.now() + 60_000;
+		return { action: { skillId: "survive.dig-in" }, detail: { reason: "exposed at night, no bed" } };
+	},
+});

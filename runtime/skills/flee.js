@@ -39,7 +39,7 @@ export const skill = Object.freeze({
 	async execute(ctx, args = {}) {
 		const hit = nearestHostile(ctx.bot, args);
 		if (!hit) return { ok: false, code: "no_hostile", detail: "no matching hostile after precondition", worldDelta: null };
-		const res = await fleeFrom(ctx.bot, hit.entity, args.distance ?? 16);
+		const res = await fleeFrom(ctx.bot, hit.entity, args.distance ?? 16, { motion: ctx.motion, blindMs: args.blindMs });
 		if (res.ok) {
 			return {
 				ok: true,
@@ -48,8 +48,10 @@ export const skill = Object.freeze({
 				worldDelta: { fledTo: res.detail?.to ?? null },
 			};
 		}
+		// Prefer the structured code from MotionService (stuck/timeout/nopath);
+		// fall back to string-sniffing the legacy path's message.
 		const msg = String(res.detail ?? "");
-		const code = msg.includes("timed out") ? "timeout" : "failed";
+		const code = res.code ?? (msg.includes("timed out") ? "timeout" : "failed");
 		return { ok: false, code, detail: res.detail, worldDelta: null };
 	},
 	recover(ctx, result) {

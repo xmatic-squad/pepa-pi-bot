@@ -57,6 +57,9 @@ import { createSkillMetrics } from "./skill-metrics.js";
 import { createWorldJournal } from "./world-journal.js";
 import { createScenarioMemory, situationHash } from "./scenario-memory.js";
 import { createOwnedBlocksLedger } from "./owned-blocks.js";
+import { createInventoryLedger } from "./services/inventory-ledger.js";
+import { createMotionService } from "./services/motion.js";
+import { createAntiLoop } from "./anti-loop.js";
 import { initKnowledge } from "./knowledge/index.js";
 import { attach as attachCoach } from "./coach/postmortem.js";
 import { attach as attachReflect } from "./coach/reflect.js";
@@ -64,6 +67,8 @@ import { attach as attachTuner } from "./coach/trigger-tuner.js";
 import { attach as attachChatter } from "./persona/chatter.js";
 import { attachAwareness } from "./awareness/events.js";
 import { pickCurrentStep } from "./goal/state.js";
+import { createGoalManager } from "./goal/goal-manager.js";
+import { computeVillageScore } from "./goal/village-score.js";
 
 fs.mkdirSync(stateDir, { recursive: true });
 const JOINED_FLAG = path.join(stateDir, "joined-before.flag");
@@ -104,6 +109,10 @@ const skillMetrics = createSkillMetrics();
 const worldJournal = createWorldJournal();
 const scenarioMemory = createScenarioMemory();
 const ownedBlocks = createOwnedBlocksLedger();
+const inventoryLedger = createInventoryLedger();
+const antiLoop = createAntiLoop();
+const goalManager = createGoalManager();
+let motionService = null; // armed on spawn (needs a live bot for pathfinder)
 let lastResult = null; // { label, ok, code, detail, ts }
 let lastFailureAt = 0;
 let lastPlanReadAt = 0;
@@ -130,6 +139,9 @@ const reflexCtx = {
 	memory: scenarioMemory,
 	metrics: skillMetrics,
 	owned: ownedBlocks,
+	ledger: inventoryLedger,
+	antiLoop,
+	motion: null, // set on spawn alongside the pathfinder watchdog
 };
 
 let chatTimestamps = [];
@@ -690,6 +702,14 @@ function connect() {
 			pathWatchdog = createPathfinderWatchdog(bot);
 			info("pathfinder", "stuck-replan watchdog armed");
 		} catch (e) { warn("pathfinder", `watchdog start failed: ${e?.message ?? e}`); }
+		// MotionService (L1): structured gotoSafe() with wall-clock timeout +
+		// progress watchdog + noPath/timeout listener. Skills opt in for a
+		// {ok|stuck|timeout|nopath} result instead of a silent hang.
+		try {
+			motionService = createMotionService(bot);
+			reflexCtx.motion = motionService;
+			info("motion", "MotionService armed");
+		} catch (e) { warn("motion", `MotionService start failed: ${e?.message ?? e}`); }
 		// v0.2.0 — self-learning coach + persona narration. Both are
 		// import-safe; they just attach listeners and (for coach) a periodic
 		// Pi-drain timer. See docs/v0.2.0-self-learning.md.
@@ -753,6 +773,8 @@ function connect() {
 		warn("mc", `connection ended: ${reason}`);
 		bot = null;
 		reflexCtx.bot = null;
+		motionService = null;
+		reflexCtx.motion = null;
 		lastSnapshot = { connected: false };
 		if (!shuttingDown) scheduleReconnect();
 	});
@@ -830,6 +852,10 @@ function tick() {
 	if (shuttingDown) return;
 	const now = Date.now();
 	if (bot && bot.entity) {
+		// L1: record an inventory snapshot every tick so skills can verify
+		// pickups by diff (ledger.gainedSince/acquired) rather than trusting
+		// the unreliable playerCollect event.
+		try { inventoryLedger.update(bot, now); } catch {}
 		lastSnapshot = buildSnapshot(bot);
 		lastSnapshot.pendingProposals = listProposals().length;
 		lastSnapshot.lastReflex = reflexCtx.lastReflex ?? null;
@@ -854,6 +880,18 @@ function tick() {
 		// other observers can react to step transitions without
 		// re-importing the picker.
 		try { lastSnapshot.storyStep = pickCurrentStep(lastSnapshot); } catch {}
+		// L3 Settlement Contract: evaluate milestone invariants against the
+		// world and surface the unified progression goal + suggested skill.
+		// Precomputed here (like curriculum/storyStep) so reflex.js consumes
+		// snapshot.contract and the TUI/score read it without re-walking.
+		try {
+			lastSnapshot.contract = goalManager.next(lastSnapshot, { ledger: inventoryLedger });
+			lastSnapshot.villageScore = computeVillageScore(lastSnapshot, {
+				contract: lastSnapshot.contract,
+				uptimeMs: botSpawnedAt ? Date.now() - botSpawnedAt : 0,
+				metrics: skillMetrics.snapshot(),
+			});
+		} catch (e) { warn("contract", `eval failed: ${e?.message ?? e}`); }
 		reflexCtx.snapshot = lastSnapshot;
 		if (!reflexPaused) {
 			const result = runTick(reflexCtx);
@@ -934,6 +972,40 @@ function tick() {
 		});
 		if (wedged?.fire) {
 			void filePostCritique(wedged, "wedged");
+		}
+
+		// QW5 — anti-loop: a skill that failed ≥3× in 5 min is blacklisted by
+		// the detector; here we turn each fired loop into an improvement_request
+		// so the operator/Codex gets a concrete ticket instead of silent thrash.
+		for (const loop of antiLoop.drainFired()) {
+			try {
+				writeProposal({
+					kind: `anti-loop-${loop.skillId}`,
+					summary: `${loop.skillId} looped ${loop.count}× in 5min (last code=${loop.code ?? "?"})`,
+					body: [
+						`# Anti-loop: ${loop.skillId}`,
+						``,
+						`The same skill failed ${loop.count} times within 5 minutes with no success`,
+						`in between, so it has been blacklisted until ${new Date(loop.until).toISOString()}.`,
+						``,
+						`- skill: ${loop.skillId}`,
+						loop.targetKey ? `- target: ${loop.targetKey}` : `- target: (none)`,
+						`- last failure code: ${loop.code ?? "?"}`,
+						`- runtime state: ${lastSnapshot.runtimeState ?? "?"}`,
+						`- no-progress reason: ${lastSnapshot.noProgressReason ?? "?"}`,
+						`- position: ${JSON.stringify(lastSnapshot.position ?? null)}`,
+						`- milestone: ${lastSnapshot.contract?.milestone?.id ?? lastSnapshot.currentMilestone ?? "?"}`,
+						``,
+						`## Suggested fix`,
+						`Either the skill's preconditions are too loose (it keeps being chosen`,
+						`when it cannot succeed here) or it needs a real recovery branch. Inspect`,
+						`runtime/skills/${loop.skillId.split(".").pop()}*.js and the scheduler path.`,
+					].join("\n"),
+					editScope: ["runtime/skills/", "runtime/reflex.js", "runtime/modes.js"],
+				});
+			} catch (e) {
+				warn("anti-loop", `writeProposal failed: ${e?.message ?? e}`);
+			}
 		}
 
 		ipc?.broadcast(EVENT_TYPES.STATUS, lastSnapshot);
