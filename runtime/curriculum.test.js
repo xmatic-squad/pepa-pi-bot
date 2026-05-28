@@ -191,10 +191,10 @@ test("listMilestones exposes ordered ids for diary/TUI", () => {
 	}
 });
 
-test("food.basic with no carried food suggests acquire-food", () => {
+test("food.basic with no carried food or visible target suggests scout-food", () => {
 	const got = nextMilestone(snapAfter("stone.tools", {}, { food: 8 }));
 	assert.equal(got.milestone.id, "food.basic");
-	assert.equal(got.plan.skillId, "survive.acquire-food");
+	assert.equal(got.plan.skillId, "survive.scout-food");
 });
 
 test("storage.chest crafts first, then places carried chest", () => {

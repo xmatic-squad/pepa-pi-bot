@@ -204,12 +204,20 @@ export async function runSkill(id, ctx, args = {}) {
 		};
 	}
 	if (!pre.ok) {
-		return {
+		const result = {
 			ok: false,
 			code: pre.code ?? RUNNER_CODES.PRECONDITION_FAILED,
 			detail: pre.detail ?? "preconditions failed",
 			worldDelta: null,
 		};
+		if (typeof skill.recover === "function") {
+			try {
+				result.recovery = skill.recover(ctx, result) ?? null;
+			} catch (e) {
+				warn("skill", `${id}.recover threw: ${e.message}`);
+			}
+		}
+		return result;
 	}
 
 	const timeoutMs = skill.timeoutMs ?? 30_000;

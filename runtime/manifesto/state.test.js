@@ -30,14 +30,14 @@ test("pickActiveNeed: fresh spawn → L0 alive if zero food", () => {
 	_resetForTest();
 	const a = pickActiveNeed(snap({ food: 0 }));
 	assert.equal(a.need.id, "alive");
-	assert.equal(a.skillId, "survive.acquire-food");
+	assert.equal(a.skillId, "survive.scout-food");
 });
 
-test("pickActiveNeed: hp ok, no food in inventory → L1 food (acquire)", () => {
+test("pickActiveNeed: hp ok, no food in inventory → L1 food (scout)", () => {
 	_resetForTest();
 	const a = pickActiveNeed(snap());
 	assert.equal(a.need.id, "food");
-	assert.equal(a.skillId, "survive.acquire-food");
+	assert.equal(a.skillId, "survive.scout-food");
 });
 
 test("pickActiveNeed: food covered → L2 tools_wood (gather logs)", () => {

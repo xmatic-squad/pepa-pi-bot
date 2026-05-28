@@ -37,6 +37,7 @@ const BED_ITEMS = [
 	"lime_bed", "pink_bed", "gray_bed", "light_gray_bed", "cyan_bed",
 	"purple_bed", "blue_bed", "brown_bed", "green_bed", "red_bed", "black_bed",
 ];
+const PASSIVE_FOOD_MOBS = new Set(["cow", "pig", "chicken", "sheep", "rabbit", "mooshroom"]);
 
 function hasAny(inv, names) {
 	if (!inv) return false;
@@ -77,6 +78,18 @@ function hostileImminent(s) {
 	return (h.distance ?? Infinity) < 8;
 }
 
+function hasVisibleFoodTarget(s) {
+	const passives = s?.nearbyEntities?.passives ?? [];
+	return passives.some((e) => PASSIVE_FOOD_MOBS.has(e.name) && (e.distance ?? Infinity) <= 32);
+}
+
+function blockCount(s, kind) {
+	const v = s?.nearbyBlocks?.[kind];
+	if (typeof v === "number") return v;
+	if (v && typeof v.count === "number") return v.count;
+	return 0;
+}
+
 function aliveDetect(s) {
 	if (!s?.connected) return true; // not connected, nothing to do
 	const hp = s.health ?? 20;
@@ -98,7 +111,7 @@ function alivePursue(s) {
 		return { skillId: "survive.eat" };
 	}
 	if (food <= 0 && !s.hasFood) {
-		return { skillId: "survive.acquire-food" };
+		return { skillId: hasVisibleFoodTarget(s) ? "survive.acquire-food" : "survive.scout-food" };
 	}
 	if (hostileImminent(s)) {
 		return { skillId: "survive.flee" };
@@ -119,7 +132,7 @@ function foodPursue(s) {
 	if ((s.food ?? 20) < 16 && s.hasFood) {
 		return { skillId: "survive.eat" };
 	}
-	return { skillId: "survive.acquire-food" };
+	return { skillId: hasVisibleFoodTarget(s) ? "survive.acquire-food" : "survive.scout-food" };
 }
 
 function toolsWoodDetect(s) {
@@ -134,7 +147,7 @@ function toolsWoodPursue(s) {
 	const logs = countLogs(inv);
 	const sticks = inv.stick ?? 0;
 	const hasWb = (inv.crafting_table ?? 0) > 0
-		|| (s.nearbyBlocks?.craftingTable ?? 0) > 0;
+		|| blockCount(s, "craftingTable") > 0;
 
 	if (logs < 2 && planks < 4 && !hasWb) {
 		return { skillId: "gather.logs" };
@@ -159,7 +172,7 @@ function toolsWoodPursue(s) {
 
 function shelterBasicDetect(s) {
 	const inv = s?.inventory ?? {};
-	const bedPlaced = (s.nearbyBlocks?.beds ?? 0) > 0;
+	const bedPlaced = blockCount(s, "beds") > 0;
 	return bedPlaced || hasAny(inv, BED_ITEMS);
 }
 
@@ -233,10 +246,10 @@ function foodSecurityDetect(s) {
 }
 
 function foodSecurityPursue(s) {
-	if ((s.inventory?.wheat_seeds ?? 0) > 0 && (s.nearbyBlocks?.crops ?? 0) > 0) {
+	if ((s.inventory?.wheat_seeds ?? 0) > 0 && blockCount(s, "crops") > 0) {
 		return { skillId: "farm.wheat" };
 	}
-	return { skillId: "survive.acquire-food" };
+	return { skillId: hasVisibleFoodTarget(s) ? "survive.acquire-food" : "survive.scout-food" };
 }
 
 function toolsIronDetect(s) {
@@ -265,7 +278,7 @@ function villageSeedDetect(s) {
 	// Heuristic: at least one chest placed AND one bed placed within
 	// nearby radius. Tightens later (POIs of kind "structure").
 	const nb = s?.nearbyBlocks ?? {};
-	return (nb.storage ?? 0) >= 1 && (nb.beds ?? 0) >= 1;
+	return blockCount(s, "storage") >= 1 && blockCount(s, "beds") >= 1;
 }
 
 function villageSeedPursue(s) {
@@ -310,5 +323,5 @@ export function getNeed(id) {
 // Test exports
 export const __testing = {
 	hasAny, countAny, countLogs, countPlanks,
-	FOOD_ITEMS, BED_ITEMS, ARMOR_CHEST_ANY,
+	FOOD_ITEMS, BED_ITEMS, ARMOR_CHEST_ANY, hasVisibleFoodTarget, blockCount,
 };

@@ -173,7 +173,31 @@ export async function fleeFrom(bot, fromEntity, distance = 16) {
 		);
 		return { ok: true, detail: { to: { x: tx, y: ty, z: tz } } };
 	} catch (e) {
-		warn("action", `flee failed: ${e.message}`);
+		warn("action", `flee path failed: ${e.message}; trying blind retreat`);
+		const before = bot.entity.position.clone?.() ?? { ...bot.entity.position };
+		try { bot.pathfinder?.stop?.(); } catch {}
+		try { await bot.look(-Math.atan2(dx / len, dz / len), 0, true); } catch {}
+		bot.setControlState("forward", true);
+		bot.setControlState("jump", true);
+		try {
+			await new Promise((r) => setTimeout(r, 7_000));
+		} finally {
+			bot.setControlState("forward", false);
+			bot.setControlState("jump", false);
+		}
+		const after = bot.entity.position;
+		const moved = Math.hypot(after.x - before.x, after.z - before.z);
+		if (moved >= 4) {
+			return {
+				ok: true,
+				detail: {
+					to: { x: Math.round(after.x), y: Math.round(after.y), z: Math.round(after.z) },
+					mode: "blind-retreat",
+					moved,
+				},
+			};
+		}
+		warn("action", `flee blind retreat moved only ${moved.toFixed(2)} blocks`);
 		return { ok: false, detail: e.message };
 	}
 }

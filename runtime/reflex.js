@@ -375,6 +375,39 @@ function metricRecoverySkill(ctx, plannedSkillId) {
 	return null;
 }
 
+function checkSkillPreconditions(ctx, skillId, args = {}) {
+	const skill = getSkill(skillId);
+	if (!skill) return { ok: false, code: "unknown_skill", detail: skillId };
+	try {
+		return skill.preconditions(ctx, args) ?? { ok: true };
+	} catch (e) {
+		return { ok: false, code: "precondition_failed", detail: e?.message ?? String(e) };
+	}
+}
+
+function resolveAdvisorSkill(ctx, rec, currentSkillId) {
+	if (!rec?.skillId) return null;
+	const pre = checkSkillPreconditions(ctx, rec.skillId);
+	if (pre.ok) return rec.skillId;
+
+	// The most common stale/under-specified advice is "switch to local
+	// acquire-food" when no passive mob exists in the entity horizon.
+	// Treat that as the broader food-search intent and route to scout-food.
+	if (rec.skillId === "survive.acquire-food" && pre.code === "no_target") {
+		const scoutPre = checkSkillPreconditions(ctx, "survive.scout-food");
+		if (scoutPre.ok) {
+			info(REFLEX_LOG, `advisor correction: ${rec.skillId} has no local target; using survive.scout-food`);
+			return "survive.scout-food";
+		}
+	}
+
+	info(
+		REFLEX_LOG,
+		`advisor ignored: ${currentSkillId} → ${rec.skillId} failed preconditions (${pre.code}: ${String(pre.detail ?? "").slice(0, 80)})`,
+	);
+	return null;
+}
+
 // v0.2.0-rc.3 — wedged-emergency escape. When the bot has not made
 // meaningful horizontal progress for ≥ 60s AND there's no immediate
 // hostile (defendReflex would have handled it) AND a placeable block
@@ -443,6 +476,10 @@ function curriculumReflex(ctx) {
 	const plan = s.curriculum?.plan;
 	const wanderHintUntil = ctx.skillBackoff?.["__wander_hint__"] ?? 0;
 	const wantWander = wanderHintUntil && Date.now() < wanderHintUntil;
+	const scoutFoodHintUntil = ctx.skillBackoff?.["__scout_food_hint__"] ?? 0;
+	const wantScoutFood = scoutFoodHintUntil && Date.now() < scoutFoodHintUntil;
+	const relocateHintUntil = ctx.skillBackoff?.["__relocate_hint__"] ?? 0;
+	const wantRelocate = relocateHintUntil && Date.now() < relocateHintUntil;
 
 	// v0.3.0-rc.2 — manifesto layer. Walk the L0-L10 needs ladder; the
 	// lowest unsatisfied need dictates the planned skill. The curriculum
@@ -525,6 +562,24 @@ function curriculumReflex(ctx) {
 		}
 	}
 
+	if (wantRelocate || wantScoutFood) {
+		ctx.lastCurriculumAt = Date.now();
+		ctx.skillBackoff = ctx.skillBackoff ?? {};
+		const hintSkillId = wantRelocate ? "village.relocate" : "survive.scout-food";
+		const hintKey = wantRelocate ? "__relocate_hint__" : "__scout_food_hint__";
+		ctx.skillBackoff[hintKey] = 0;
+		const pre = checkSkillPreconditions(ctx, hintSkillId);
+		if (pre.ok) {
+			ctx.dispatch(() => runSkill(hintSkillId, ctx), hintSkillId, {});
+			return {
+				action: "dispatched",
+				kind: wantRelocate ? "curriculum-recovery-relocate" : "curriculum-recovery-scout-food",
+				label: hintSkillId,
+			};
+		}
+		info(REFLEX_LOG, `recovery hint ${hintSkillId} skipped (${pre.code}: ${String(pre.detail ?? "").slice(0, 80)})`);
+	}
+
 	// No skill plan from curriculum OR a recent skill asked us to wander.
 	// First hint → small wander (might just be 32-block reach issue).
 	// Every subsequent hint while still inside the backoff window → use
@@ -595,11 +650,16 @@ function curriculumReflex(ctx) {
 	if (!ctx.disableAdvisor) {
 		const rec = consumeFreshRecommendation(ctx);
 		if (rec && rec.skillId) {
-			info(REFLEX_LOG, `advisor override: ${skillId} → ${rec.skillId} (${rec.triggerReason}, ${rec.rationale?.slice(0, 60)})`);
-			skillId = rec.skillId;
-			skillSource = `advisor:${rec.triggerReason}`;
-			appliedRecommendationId = rec.id ?? null;
-			if (appliedRecommendationId) markRecommendationApplied(appliedRecommendationId);
+			const resolved = resolveAdvisorSkill(ctx, rec, skillId);
+			if (resolved) {
+				info(REFLEX_LOG, `advisor override: ${skillId} → ${resolved} (${rec.triggerReason}, ${rec.rationale?.slice(0, 60)})`);
+				skillId = resolved;
+				skillSource = `advisor:${rec.triggerReason}`;
+				appliedRecommendationId = rec.id ?? null;
+				if (appliedRecommendationId) markRecommendationApplied(appliedRecommendationId);
+			} else if (rec.id) {
+				markRecommendationOutcome(rec.id, { ok: false, code: "precondition_failed" });
+			}
 		}
 		// Always fire-and-forget another advise() if triggers fire — the
 		// result lands on a future tick. tickAdvisor handles its own
@@ -671,6 +731,14 @@ function curriculumReflex(ctx) {
 				// log" — switch to exploration for a minute.
 				ctx.skillBackoff["__wander_hint__"] = Date.now() + SKILL_BACKOFF_MS;
 				consecutiveWanderHints++;
+			}
+			if (res?.recovery?.hint === "scout-food") {
+				ctx.skillBackoff[dispatchSkillId] = Date.now() + SKILL_BACKOFF_MS;
+				ctx.skillBackoff["__scout_food_hint__"] = Date.now() + SKILL_BACKOFF_MS;
+			}
+			if (res?.recovery?.hint === "relocate") {
+				ctx.skillBackoff[dispatchSkillId] = Date.now() + SKILL_BACKOFF_MS;
+				ctx.skillBackoff["__relocate_hint__"] = Date.now() + SKILL_BACKOFF_MS;
 			}
 			if (!res?.ok) {
 				// missing_tool / missing_material / no_target shouldn't be

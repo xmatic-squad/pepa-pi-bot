@@ -37,15 +37,17 @@ const { pathfinder, goals, Movements } = pathfinderPkg;
 import { info, warn } from "../log.js";
 import { foods } from "./groups.js";
 import { affordancesFor, hasPassiveMobs, isBarren } from "../biome-affordances.js";
+import { blindWalkOrTunnelOut } from "./explore-far.js";
 
 const PASSIVE_FOOD_MOBS = new Set(["cow", "pig", "chicken", "sheep", "rabbit", "mooshroom"]);
 const CARDINALS = [
-	{ name: "N", dx: 0, dz: -1 },
-	{ name: "E", dx: 1, dz: 0 },
-	{ name: "S", dx: 0, dz: 1 },
-	{ name: "W", dx: -1, dz: 0 },
+	{ name: "N", dx: 0, dz: -1, yaw: Math.PI },
+	{ name: "E", dx: 1, dz: 0, yaw: -Math.PI / 2 },
+	{ name: "S", dx: 0, dz: 1, yaw: 0 },
+	{ name: "W", dx: -1, dz: 0, yaw: Math.PI / 2 },
 ];
 const PATROL_TICK_DISTANCE = 16;
+const PATROL_STEP_TIMEOUT_MS = 12_000;
 const DEFAULT_COMMIT_DISTANCE = 200;
 
 let pluginLoaded = new WeakSet();
@@ -57,7 +59,7 @@ function ensurePathfinder(bot) {
 
 function setMovementsForTravel(bot) {
 	const m = new Movements(bot);
-	m.canDig = false;
+	m.canDig = true;
 	m.allow1by1towers = false;
 	bot.pathfinder.setMovements(m);
 }
@@ -122,6 +124,27 @@ function scanForFoodCapableNeighbourBiome(bot, radius = 64) {
 	return null;
 }
 
+function scoutState(ctx, bot) {
+	const here = bot?.entity?.position;
+	const now = Date.now();
+	const prev = ctx.scoutFoodState;
+	const expired = !prev || now - (prev.ts ?? 0) > 10 * 60_000;
+	const displaced = prev?.origin && here
+		? Math.hypot(here.x - prev.origin.x, here.z - prev.origin.z) > 128
+		: false;
+	if (expired || displaced) {
+		ctx.scoutFoodState = {
+			ts: now,
+			origin: here ? { x: here.x, z: here.z } : null,
+			tried: new Set(),
+		};
+		return ctx.scoutFoodState;
+	}
+	prev.ts = now;
+	if (!(prev.tried instanceof Set)) prev.tried = new Set(prev.tried ?? []);
+	return prev;
+}
+
 async function patrolCardinal(bot, cardinal, distance, ctx) {
 	ensurePathfinder(bot);
 	setMovementsForTravel(bot);
@@ -135,17 +158,58 @@ async function patrolCardinal(bot, cardinal, distance, ctx) {
 		try {
 			await Promise.race([
 				bot.pathfinder.goto(goal),
-				new Promise((_, rej) => setTimeout(() => rej(new Error("patrol step timeout")), 30_000)),
+				new Promise((_, rej) => setTimeout(() => rej(new Error("patrol step timeout")), PATROL_STEP_TIMEOUT_MS)),
 			]);
 		} catch (e) {
-			return { aborted: false, travelled, error: e?.message ?? String(e) };
+			info("action", `scout-food: path step failed (${e?.message ?? e}); blind fallback ${cardinal.name}`);
+			try { bot.pathfinder?.stop?.(); } catch {}
+			const blind = await blindWalkOrTunnelOut(bot, {
+				yaw: cardinal.yaw ?? -Math.atan2(cardinal.dx, cardinal.dz),
+				dirName: cardinal.name,
+				blindMs: 12_000,
+				minMove: 6,
+				reason: `scout-food ${cardinal.name}`,
+			});
+			const progress = cardinalProgress(start, bot.entity.position, cardinal);
+			travelled = progress.along;
+			const target = nearestPassiveFoodMob(bot, 32);
+			if (target) return { aborted: false, travelled, target };
+			if (progress.total >= 4 && progress.along < 4) {
+				info("action", `scout-food: ${cardinal.name} blocked; drifted ${progress.driftName ?? "sideways"} ${progress.total.toFixed(1)}b`);
+				return {
+					aborted: false,
+					travelled,
+					blocked: true,
+					drifted: progress.driftName,
+					error: `blocked_${cardinal.name}`,
+				};
+			}
+			if (!blind.ok && progress.total < 4) {
+				return { aborted: false, travelled, error: e?.message ?? String(e) };
+			}
+			continue;
 		}
-		travelled += PATROL_TICK_DISTANCE;
+		const progress = cardinalProgress(start, bot.entity.position, cardinal);
+		travelled = Math.max(travelled + PATROL_TICK_DISTANCE, progress.along);
 		// Rescan after every step.
 		const target = nearestPassiveFoodMob(bot, 32);
 		if (target) return { aborted: false, travelled, target };
 	}
 	return { aborted: false, travelled };
+}
+
+function cardinalProgress(start, pos, cardinal) {
+	const dx = (pos?.x ?? 0) - (start?.x ?? 0);
+	const dz = (pos?.z ?? 0) - (start?.z ?? 0);
+	const along = Math.max(0, dx * cardinal.dx + dz * cardinal.dz);
+	const total = Math.hypot(dx, dz);
+	return { along, total, driftName: dominantCardinal(dx, dz, cardinal.name) };
+}
+
+function dominantCardinal(dx, dz, fallback = null) {
+	if (Math.abs(dx) < 0.5 && Math.abs(dz) < 0.5) return fallback;
+	if (Math.abs(dx) >= Math.abs(dz)) return dx >= 0 ? "E" : "W";
+	return dz >= 0 ? "S" : "N";
 }
 
 export const skill = Object.freeze({
@@ -162,7 +226,8 @@ export const skill = Object.freeze({
 	async execute(ctx, args = {}) {
 		const bot = ctx.bot;
 		const before = foodCount(bot);
-		const triedCardinals = new Set(args?._triedCardinals ?? []);
+		const state = scoutState(ctx, bot);
+		const triedCardinals = new Set([...(args?._triedCardinals ?? []), ...(state.tried ?? [])]);
 
 		// Step 0: biome check. If barren, head toward a food-capable neighbour.
 		const biome = currentBiomeName(bot);
@@ -174,14 +239,23 @@ export const skill = Object.freeze({
 			if (next) {
 				info("action", `scout-food: leaving barren biome ${biome} → ${next.biome} via ${next.heading.name}`);
 				const result = await patrolCardinal(bot, next.heading, DEFAULT_COMMIT_DISTANCE, ctx);
-				if (result.aborted) return { ok: false, code: "preempted", worldDelta: null };
-				if (result.target) {
-					return await tryHunt(bot, result.target, before);
-				}
-				return {
-					ok: false,
-					code: "no_target",
-					detail: `walked ${Math.round(result.travelled)}b ${next.heading.name} toward ${next.biome}, still no food`,
+		if (result.aborted) return { ok: false, code: "preempted", worldDelta: null };
+		if (result.target) {
+			return await tryHunt(bot, result.target, before);
+		}
+		if (result.blocked) {
+			state.tried.add(next.heading.name);
+			return {
+				ok: false,
+				code: "blocked_heading",
+				detail: `blocked ${next.heading.name}, drifted ${result.drifted ?? "sideways"}`,
+				worldDelta: { moved: Math.round(result.travelled), heading: next.heading.name, drifted: result.drifted ?? null },
+			};
+		}
+		return {
+			ok: false,
+			code: "no_target",
+			detail: `walked ${Math.round(result.travelled)}b ${next.heading.name} toward ${next.biome}, still no food`,
 					worldDelta: { moved: Math.round(result.travelled), heading: next.heading.name, from_biome: biome, to_biome: next.biome },
 				};
 			}
@@ -208,20 +282,35 @@ export const skill = Object.freeze({
 			};
 		}
 		const cardinal = untried[0];
+		state.tried.add(cardinal.name);
 		info("action", `scout-food: commit cardinal ${cardinal.name} for ${DEFAULT_COMMIT_DISTANCE}b`);
-		const result = await patrolCardinal(bot, cardinal, DEFAULT_COMMIT_DISTANCE, ctx);
-		if (result.aborted) return { ok: false, code: "preempted", worldDelta: null };
-		if (result.target) return await tryHunt(bot, result.target, before);
+	const result = await patrolCardinal(bot, cardinal, DEFAULT_COMMIT_DISTANCE, ctx);
+	if (result.aborted) return { ok: false, code: "preempted", worldDelta: null };
+	if (result.target) return await tryHunt(bot, result.target, before);
+	if (result.blocked) {
 		return {
 			ok: false,
-			code: "no_target",
-			detail: { tried: cardinal.name, travelled: Math.round(result.travelled), error: result.error ?? null },
+			code: "blocked_heading",
+			detail: { tried: cardinal.name, travelled: Math.round(result.travelled), drifted: result.drifted ?? null, error: result.error ?? null },
+			worldDelta: { moved: Math.round(result.travelled), heading: cardinal.name, drifted: result.drifted ?? null, from_biome: biome },
+		};
+	}
+	return {
+		ok: false,
+		code: "no_target",
+		detail: { tried: cardinal.name, travelled: Math.round(result.travelled), error: result.error ?? null },
 			worldDelta: { moved: Math.round(result.travelled), heading: cardinal.name, from_biome: biome },
 		};
 	},
 	recover(ctx, result) {
 		if (result.code === "exhausted") {
 			return { hint: "relocate", reason: "scout-food exhausted all 4 cardinals; needs a long jump" };
+		}
+		if (result.code === "blocked_heading") {
+			return { hint: "scout-food", reason: "chosen scout heading is blocked; retry another cardinal" };
+		}
+		if (result.code === "approached_target" || result.code === "no_path") {
+			return { hint: "scout-food", reason: "made or attempted progress toward food target; rescan from current position" };
 		}
 		if (result.code === "no_target") {
 			return { hint: "wander", reason: "scout completed leg without finding mob; try another cardinal" };
@@ -233,12 +322,42 @@ export const skill = Object.freeze({
 async function tryHunt(bot, target, before) {
 	ensurePathfinder(bot);
 	setMovementsForTravel(bot);
+	const start = bot.entity.position.clone?.() ?? { ...bot.entity.position };
 	try {
 		await Promise.race([
 			bot.pathfinder.goto(new goals.GoalFollow(target.entity, 2)),
 			new Promise((_, rej) => setTimeout(() => rej(new Error("path-to-mob timeout")), 30_000)),
 		]);
 	} catch (e) {
+		try { bot.pathfinder?.stop?.(); } catch {}
+		const moved = horizontalDistance(start, bot.entity.position);
+		if (moved >= 6) {
+			return {
+				ok: false,
+				code: "approached_target",
+				detail: { target: target.entity.name, moved: Math.round(moved), mode: "pathfinder_partial", error: e?.message ?? "path failed" },
+				worldDelta: { moved: Math.round(moved), target: target.entity.name, mode: "pathfinder_partial" },
+			};
+		}
+		const yaw = yawToward(bot.entity.position, target.entity.position);
+		if (yaw !== null) {
+			const blind = await blindWalkOrTunnelOut(bot, {
+				yaw,
+				dirName: `toward-${target.entity.name}`,
+				blindMs: 8_000,
+				minMove: 4,
+				reason: `scout-food target ${target.entity.name}`,
+			});
+			const afterBlind = horizontalDistance(start, bot.entity.position);
+			if (blind.ok || afterBlind >= 4) {
+				return {
+					ok: false,
+					code: "approached_target",
+					detail: { target: target.entity.name, moved: Math.round(afterBlind), mode: "blind_target", error: e?.message ?? "path failed" },
+					worldDelta: { moved: Math.round(afterBlind), target: target.entity.name, mode: "blind_target" },
+				};
+			}
+		}
 		return { ok: false, code: "no_path", detail: e?.message ?? "path failed", worldDelta: null };
 	}
 	info("action", `scout-food: engaging ${target.entity.name}@${target.distance.toFixed(1)}b`);
@@ -269,8 +388,21 @@ async function tryHunt(bot, target, before) {
 	};
 }
 
+function horizontalDistance(a, b) {
+	return Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.z ?? 0) - (a?.z ?? 0));
+}
+
+function yawToward(from, to) {
+	if (!from || !to) return null;
+	const dx = to.x - from.x;
+	const dz = to.z - from.z;
+	if (Math.hypot(dx, dz) < 0.5) return null;
+	return -Math.atan2(dx, dz);
+}
+
 // Test exports
 export const __testing = {
-	CARDINALS, PATROL_TICK_DISTANCE, DEFAULT_COMMIT_DISTANCE,
+	CARDINALS, PATROL_TICK_DISTANCE, DEFAULT_COMMIT_DISTANCE, PATROL_STEP_TIMEOUT_MS,
 	nearestPassiveFoodMob, currentBiomeName, scanForFoodCapableNeighbourBiome,
+	cardinalProgress, dominantCardinal, horizontalDistance, yawToward,
 };

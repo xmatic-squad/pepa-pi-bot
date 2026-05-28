@@ -244,7 +244,7 @@ test("curriculum dispatches suggested skill by id", () => {
 	assert.ok(typeof dispatches[0].opts.onComplete === "function");
 });
 
-test("manifesto: hungry bot with no food drives survive.acquire-food (manifesto fallback when storyline disabled)", () => {
+test("manifesto: hungry bot with no visible food drives survive.scout-food (manifesto fallback when storyline disabled)", () => {
 	const { ctx, dispatches } = makeCtx({
 		disableManifesto: false,
 		disableStoryline: true,
@@ -263,7 +263,7 @@ test("manifesto: hungry bot with no food drives survive.acquire-food (manifesto 
 	});
 	const out = runTick(ctx);
 	assert.equal(out.reflex, "curriculum");
-	assert.equal(dispatches[0].label, "survive.acquire-food", "manifesto L1 food took over");
+	assert.equal(dispatches[0].label, "survive.scout-food", "manifesto L1 food took over");
 	assert.equal(ctx.activeNeed?.need?.id, "food");
 });
 

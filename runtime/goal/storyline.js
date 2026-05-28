@@ -52,6 +52,7 @@ const FOOD_ITEMS = [
 	"apple", "carrot", "potato", "beetroot", "melon_slice", "sweet_berries",
 	"golden_apple", "golden_carrot",
 ];
+const PASSIVE_FOOD_MOBS = new Set(["cow", "pig", "chicken", "sheep", "rabbit", "mooshroom"]);
 
 function hasSetItem(inv, set) {
 	if (!inv) return false;
@@ -92,6 +93,27 @@ function countPlanks(inv) {
 	return total;
 }
 
+function woodBudget(inv) {
+	if (!inv) return 0;
+	const placedOrCarriedTable = (inv.crafting_table ?? 0) > 0 ? 4 : 0;
+	return countLogs(inv) * 4 + countPlanks(inv) + placedOrCarriedTable;
+}
+
+function blockCount(snap, kind) {
+	const v = snap?.nearbyBlocks?.[kind];
+	if (typeof v === "number") return v;
+	if (v && typeof v.count === "number") return v.count;
+	return 0;
+}
+
+function hasLocalFoodMob(snap, maxDistance = 32) {
+	for (const e of snap?.nearbyEntities?.passives ?? []) {
+		if (!PASSIVE_FOOD_MOBS.has(e?.name)) continue;
+		if ((e.distance ?? Infinity) <= maxDistance) return true;
+	}
+	return false;
+}
+
 function emergencyPause(snap) {
 	if (!snap?.connected) return false;
 	const hp = snap.health ?? 20;
@@ -120,11 +142,10 @@ export const STORYLINE = Object.freeze([
 			// scan radius might never see logs/stone/crops/beds, and we
 			// were getting stuck on step 1 for hours.
 			if (hp < 18) return false;
-			const sawBlocks = (snap.nearbyBlocks?.logs ?? 0)
-				+ (snap.nearbyBlocks?.stone ?? 0)
-				+ (snap.nearbyBlocks?.crops ?? 0)
-				+ (snap.nearbyBlocks?.beds ?? 0)
-				> 0;
+			const sawBlocks = blockCount(snap, "logs")
+				+ blockCount(snap, "stone")
+				+ blockCount(snap, "crops")
+				+ blockCount(snap, "beds") > 0;
 			if (sawBlocks) return true;
 			// Fallback: settled for long enough → call orient done and let
 			// later steps drive forward into the biome.
@@ -140,13 +161,17 @@ export const STORYLINE = Object.freeze([
 
 	{
 		id: "first_wood",
-		title: "Собрать 8 поленьев",
-		narration_ru: "Цель: 8 поленьев. Иду рубить ближайшие деревья.",
+		title: "Собрать стартовое дерево",
+		narration_ru: "Нужно дерево для первого крафта. Доберу минимум и сразу к верстаку.",
 		completed(snap) {
-			return countLogs(snap?.inventory) >= 8;
+			const inv = snap?.inventory ?? {};
+			return woodBudget(inv) >= 16
+				|| hasSetItem(inv, PICKAXE_WOOD)
+				|| hasSetItem(inv, AXE_WOOD)
+				|| hasSetItem(inv, SWORD_WOOD);
 		},
 		suggestSkill(snap) {
-			const trees = snap?.nearbyBlocks?.logs ?? 0;
+			const trees = blockCount(snap, "logs");
 			if (trees > 0) return { skillId: "gather.logs" };
 			// No tree in sight — scout further. In a biome with no trees
 			// (desert, ocean) the bot must commit to a long heading; the
@@ -163,17 +188,16 @@ export const STORYLINE = Object.freeze([
 		narration_ru: "Делаю верстак и палки — без них ничего не скрафтить.",
 		completed(snap) {
 			const inv = snap?.inventory ?? {};
-			return (inv.crafting_table ?? 0) > 0
-				&& (inv.stick ?? 0) >= 2
-				&& countPlanks(inv) >= 4;
+			return ((inv.stick ?? 0) >= 2 && countPlanks(inv) >= 4)
+				|| hasSetItem(inv, PICKAXE_WOOD)
+				|| hasSetItem(inv, AXE_WOOD)
+				|| hasSetItem(inv, SWORD_WOOD);
 		},
 		suggestSkill(snap) {
 			const inv = snap?.inventory ?? {};
 			if (countPlanks(inv) < 4) return { skillId: "craft.planks" };
 			if ((inv.stick ?? 0) < 2) return { skillId: "craft.sticks" };
-			// We have raw materials, need to *place* a crafting table for tools.
-			// (No place-table skill yet — flagged as improvement_request elsewhere.)
-			return { skillId: "craft.sticks" };
+			return null;
 		},
 		emergencyPause,
 	},
@@ -190,6 +214,11 @@ export const STORYLINE = Object.freeze([
 		},
 		suggestSkill(snap) {
 			const inv = snap?.inventory ?? {};
+			if (countPlanks(inv) < 4) {
+				if (countLogs(inv) > 0) return { skillId: "craft.planks" };
+				return { skillId: "gather.logs" };
+			}
+			if ((inv.stick ?? 0) < 2) return { skillId: "craft.sticks" };
 			if (!hasSetItem(inv, PICKAXE_WOOD)) return { skillId: "craft.wooden-pickaxe" };
 			if (!hasSetItem(inv, AXE_WOOD)) return { skillId: "craft.wooden-axe" };
 			if (!hasSetItem(inv, SWORD_WOOD)) return { skillId: "craft.wooden-sword" };
@@ -213,8 +242,7 @@ export const STORYLINE = Object.freeze([
 			//    It commits to a cardinal for ~200 blocks, rescans, and
 			//    on biome boundary detection heads toward food-capable
 			//    terrain.
-			const hasPassiveNearby = (snap?.nearbyEntities?.passives?.length ?? 0) > 0;
-			if (hasPassiveNearby) return { skillId: "survive.acquire-food" };
+			if (hasLocalFoodMob(snap)) return { skillId: "survive.acquire-food" };
 			return { skillId: "survive.scout-food" };
 		},
 		emergencyPause,
@@ -225,7 +253,7 @@ export const STORYLINE = Object.freeze([
 		title: "Простой шелтер с кроватью",
 		narration_ru: "Поставлю кровать и стены — пережить ночь.",
 		completed(snap) {
-			return (snap?.nearbyBlocks?.beds ?? 0) > 0;
+			return blockCount(snap, "beds") > 0;
 		},
 		suggestSkill(snap) {
 			const inv = snap?.inventory ?? {};
@@ -272,7 +300,7 @@ export const STORYLINE = Object.freeze([
 		},
 		suggestSkill(snap) {
 			const inv = snap?.inventory ?? {};
-			if ((inv.wheat_seeds ?? 0) > 0 && (snap?.nearbyBlocks?.crops ?? 0) > 0) {
+			if ((inv.wheat_seeds ?? 0) > 0 && blockCount(snap, "crops") > 0) {
 				return { skillId: "farm.wheat" };
 			}
 			return { skillId: "survive.acquire-food" };
@@ -300,8 +328,7 @@ export const STORYLINE = Object.freeze([
 		title: "Постоянная база",
 		narration_ru: "Выбираю место под деревню — нужно нормальное основание.",
 		completed(snap) {
-			const nb = snap?.nearbyBlocks ?? {};
-			return (nb.beds ?? 0) >= 1 && (nb.storage ?? 0) >= 1;
+			return blockCount(snap, "beds") >= 1 && blockCount(snap, "storage") >= 1;
 		},
 		suggestSkill(snap) {
 			const inv = snap?.inventory ?? {};
@@ -335,5 +362,5 @@ export function getStep(id) {
 // Test exports
 export const __testing = {
 	countLogs, countPlanks, countAny, hasAny, hasSetItem,
-	FOOD_ITEMS, BED_ITEMS, emergencyPause,
+	FOOD_ITEMS, BED_ITEMS, emergencyPause, blockCount, woodBudget, hasLocalFoodMob,
 };

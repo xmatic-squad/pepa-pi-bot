@@ -72,6 +72,7 @@ function hasAny(inv, names) {
 
 const WOODEN_TOOLS = ["wooden_axe", "wooden_pickaxe", "wooden_sword"];
 const STONE_TOOLS = ["stone_axe", "stone_pickaxe", "stone_sword"];
+const PASSIVE_FOOD_MOBS = new Set(["cow", "pig", "chicken", "sheep", "rabbit", "mooshroom"]);
 
 // A "stage reached" predicate: once the bot has wooden tools, wood.16 is
 // implicitly considered done even if the log stack is now empty (the bot
@@ -84,6 +85,12 @@ function hasWoodenTier(inv) {
 }
 function hasStoneTier(inv) {
 	return STONE_TOOLS.some((n) => has(inv, n));
+}
+
+function hasVisibleFoodTarget(snap) {
+	const passives = snap?.nearbyEntities?.passives ?? [];
+	if (passives.some((e) => PASSIVE_FOOD_MOBS.has(e.name))) return true;
+	return (snap?.nearbyEntities?.droppedItems?.length ?? 0) > 0;
 }
 
 const MILESTONES = [
@@ -157,7 +164,9 @@ const MILESTONES = [
 			);
 			return carrying || (snap?.food ?? 20) >= 18;
 		},
-		suggest: () => ({ skillId: "survive.acquire-food" }),
+		suggest: (_inv, snap) => ({
+			skillId: hasVisibleFoodTarget(snap) ? "survive.acquire-food" : "survive.scout-food",
+		}),
 	},
 	{
 		id: "storage.chest",

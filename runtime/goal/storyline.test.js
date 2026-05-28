@@ -37,7 +37,7 @@ test("STORYLINE: 11 steps, all have id/title/narration/completed/suggestSkill", 
 });
 
 test("getStep: lookup by id", () => {
-	assert.equal(getStep("first_wood").title, "Собрать 8 поленьев");
+	assert.equal(getStep("first_wood").title, "Собрать стартовое дерево");
 	assert.equal(getStep("does-not-exist"), null);
 });
 
@@ -49,16 +49,18 @@ test("emergencyPause: low hp + close hostile → true", () => {
 	assert.equal(emergencyPause(snap({ food: 0 })), true);
 });
 
-test("step first_wood: completed when ≥8 logs", () => {
+test("step first_wood: completed when bootstrap wood budget is enough", () => {
 	const s = getStep("first_wood");
 	assert.equal(s.completed(snap()), false);
-	assert.equal(s.completed(snap({ inventory: { oak_log: 8 } })), true);
-	assert.equal(s.completed(snap({ inventory: { oak_log: 4, birch_log: 4 } })), true);
+	assert.equal(s.completed(snap({ inventory: { oak_log: 4 } })), true);
+	assert.equal(s.completed(snap({ inventory: { oak_log: 2, oak_planks: 8 } })), true);
+	assert.equal(s.completed(snap({ inventory: { wooden_pickaxe: 1 } })), true);
 });
 
 test("step first_wood: suggest gather.logs if trees nearby, explore.far otherwise", () => {
 	const s = getStep("first_wood");
 	assert.equal(s.suggestSkill(snap({ nearbyBlocks: { logs: 5 } })).skillId, "gather.logs");
+	assert.equal(s.suggestSkill(snap({ nearbyBlocks: { logs: { count: 1 } } })).skillId, "gather.logs");
 	assert.equal(s.suggestSkill(snap()).skillId, "explore.far");
 });
 
@@ -77,10 +79,27 @@ test("step first_food: completed at ≥2 food items", () => {
 	assert.equal(s.completed(snap({ inventory: { bread: 2 } })), true);
 });
 
+test("step first_food: local hunt only for edible passive mobs within acquire range", () => {
+	const s = getStep("first_food");
+	assert.equal(
+		s.suggestSkill(snap({ nearbyEntities: { passives: [{ name: "chicken", distance: 18 }] } })).skillId,
+		"survive.acquire-food",
+	);
+	assert.equal(
+		s.suggestSkill(snap({ nearbyEntities: { passives: [{ name: "chicken", distance: 51 }] } })).skillId,
+		"survive.scout-food",
+	);
+	assert.equal(
+		s.suggestSkill(snap({ nearbyEntities: { passives: [{ name: "cod", distance: 12 }] } })).skillId,
+		"survive.scout-food",
+	);
+});
+
 test("step shelter_minimal: completed when bed placed nearby", () => {
 	const s = getStep("shelter_minimal");
 	assert.equal(s.completed(snap()), false);
 	assert.equal(s.completed(snap({ nearbyBlocks: { beds: 1 } })), true);
+	assert.equal(s.completed(snap({ nearbyBlocks: { beds: { count: 1 } } })), true);
 });
 
 test("step stone_tier: needs cobblestone first", () => {
@@ -131,6 +150,18 @@ test("pickCurrentStep: bot with 8+ logs → first_wood done, picks crafting_basi
 	assert.ok(r);
 	assert.equal(r.step.id, "crafting_basics");
 	assert.equal(r.completedSteps, 2, "orient_self + first_wood done");
+});
+
+test("pickCurrentStep: bot with planks and sticks advances to first_tools", () => {
+	_resetForTest();
+	const r = pickCurrentStep(snap({
+		_sessionMs: 60_000,
+		nearbyBlocks: { logs: { count: 3 } },
+		inventory: { oak_planks: 16, stick: 4 },
+	}));
+	assert.ok(r);
+	assert.equal(r.step.id, "first_tools");
+	assert.equal(r.suggestion.skillId, "craft.wooden-pickaxe");
 });
 
 test("pickCurrentStep: emergency pauses suggestion", () => {

@@ -8,6 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { runSkill, RUNNER_CODES, _registerForTest } from "./index.js";
+import { __testing as scoutFoodTesting } from "./scout-food.js";
 
 const ctx = {}; // skills under test ignore ctx fully
 
@@ -37,6 +38,27 @@ test("preconditions gate execution", async () => {
 	}
 });
 
+test("precondition failures can return recovery hints", async () => {
+	const teardown = _registerForTest({
+		id: "test.precondition-recover",
+		title: "blocked with recovery",
+		timeoutMs: 1000,
+		preconditions: () => ({ ok: false, code: "no_target", detail: "none nearby" }),
+		execute: async () => {
+			throw new Error("should not run");
+		},
+		recover: (_ctx, result) => ({ hint: "scout-food", saw: result.code }),
+	});
+	try {
+		const res = await runSkill("test.precondition-recover", ctx);
+		assert.equal(res.ok, false);
+		assert.equal(res.code, "no_target");
+		assert.deepEqual(res.recovery, { hint: "scout-food", saw: "no_target" });
+	} finally {
+		teardown();
+	}
+});
+
 test("gather.logs precondition refuses nearby hostiles", async () => {
 	const bot = { registry: { blocksByName: { oak_log: { id: 1 } } } };
 	const res = await runSkill("gather.logs", {
@@ -46,6 +68,18 @@ test("gather.logs precondition refuses nearby hostiles", async () => {
 	assert.equal(res.ok, false);
 	assert.equal(res.code, "no_target");
 	assert.match(res.detail, /unsafe to gather logs: drowned 6\.1 blocks away/);
+});
+
+test("scout-food progress counts intended cardinal, not sideways tunnel drift", () => {
+	const north = scoutFoodTesting.CARDINALS.find((c) => c.name === "N");
+	assert.deepEqual(
+		scoutFoodTesting.cardinalProgress({ x: 0, z: 0 }, { x: 0, z: -9 }, north),
+		{ along: 9, total: 9, driftName: "N" },
+	);
+	assert.deepEqual(
+		scoutFoodTesting.cardinalProgress({ x: 0, z: 0 }, { x: 9, z: 0 }, north),
+		{ along: 0, total: 9, driftName: "E" },
+	);
 });
 
 test("preconditions that throw produce precondition_failed", async () => {

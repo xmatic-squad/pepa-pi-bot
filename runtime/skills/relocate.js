@@ -18,12 +18,13 @@ const { pathfinder, goals, Movements } = pathfinderPkg;
 
 import { info } from "../log.js";
 import { markRelocationStarted } from "../awareness/wedge-detector.js";
+import { blindWalkOrTunnelOut } from "./explore-far.js";
 
 const CARDINALS = [
-	{ name: "N", dx: 0, dz: -1 },
-	{ name: "E", dx: 1, dz: 0 },
-	{ name: "S", dx: 0, dz: 1 },
-	{ name: "W", dx: -1, dz: 0 },
+	{ name: "N", dx: 0, dz: -1, yaw: Math.PI },
+	{ name: "E", dx: 1, dz: 0, yaw: -Math.PI / 2 },
+	{ name: "S", dx: 0, dz: 1, yaw: 0 },
+	{ name: "W", dx: -1, dz: 0, yaw: Math.PI / 2 },
 ];
 const DEFAULT_DISTANCE = 300;
 const STEP_BLOCKS = 32;            // re-path every N blocks for liveness
@@ -37,7 +38,7 @@ function ensurePathfinder(bot) {
 }
 function setMovementsForTravel(bot) {
 	const m = new Movements(bot);
-	m.canDig = false;
+	m.canDig = true;
 	m.allow1by1towers = false;
 	bot.pathfinder.setMovements(m);
 }
@@ -100,9 +101,15 @@ export const skill = Object.freeze({
 				]);
 			} catch (e) {
 				errors.push(e?.message ?? String(e));
-				if (errors.length >= 3) break;
-				// brief pause then keep trying
-				await new Promise((r) => setTimeout(r, 500));
+				info("action", `relocate: path step failed (${e?.message ?? e}); blind fallback ${cardinal.name}`);
+				const blind = await blindWalkOrTunnelOut(bot, {
+					yaw: cardinal.yaw,
+					dirName: cardinal.name,
+					blindMs: 12_000,
+					minMove: 8,
+					reason: `relocate ${cardinal.name}`,
+				});
+				if (!blind.ok && errors.length >= 3) break;
 			}
 			// Measure actual progress (pathfinder might have routed around)
 			const dx = bot.entity.position.x - start.x;

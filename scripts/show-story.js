@@ -16,6 +16,7 @@ import net from "node:net";
 import { STORYLINE } from "../runtime/goal/storyline.js";
 import { pickCurrentStep, progressSummary, _resetForTest } from "../runtime/goal/state.js";
 import { socketPath } from "../runtime/config.js";
+import { COMMAND_TYPES, EVENT_TYPES } from "../runtime/ipc-protocol.js";
 
 function plainCatalogue() {
 	console.log("=== Storyline (canonical Minecraft survival arc) ===");
@@ -32,23 +33,31 @@ async function fetchSnapshotViaIpc() {
 		const buf = [];
 		const timer = setTimeout(() => { sock.destroy(); resolve(null); }, 1500);
 		sock.on("connect", () => {
-			sock.write(JSON.stringify({ kind: "get-status" }) + "\n");
+			sock.write(JSON.stringify({ type: COMMAND_TYPES.SNAPSHOT }) + "\n");
 		});
-		sock.on("data", (chunk) => buf.push(chunk));
-		sock.on("end", () => {
-			clearTimeout(timer);
+		const parse = () => {
 			try {
 				const raw = Buffer.concat(buf).toString("utf8").trim();
 				const lines = raw.split("\n").filter(Boolean);
 				for (const ln of lines) {
 					const obj = JSON.parse(ln);
-					if (obj?.kind === "status" && obj?.snapshot) {
-						resolve(obj.snapshot);
-						return;
+					if (obj?.type === EVENT_TYPES.STATUS && obj?.payload) {
+						clearTimeout(timer);
+						sock.destroy();
+						resolve(obj.payload);
+						return true;
 					}
 				}
-				resolve(null);
-			} catch { resolve(null); }
+			} catch {}
+			return false;
+		};
+		sock.on("data", (chunk) => {
+			buf.push(chunk);
+			parse();
+		});
+		sock.on("end", () => {
+			clearTimeout(timer);
+			if (!parse()) resolve(null);
 		});
 		sock.on("error", () => { clearTimeout(timer); resolve(null); });
 	});
