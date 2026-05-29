@@ -24,6 +24,7 @@
 import React, { useEffect, useReducer, useState } from "react";
 import { render, Box, Text, useApp, useInput, useStdout } from "ink";
 import { createIpcClient } from "./ipc-client.js";
+import { formatStatusSegments } from "./format.js";
 import { EVENT_TYPES } from "../runtime/ipc-protocol.js";
 import { stateDir } from "../runtime/config.js";
 import { initKnowledge, isAvailable as knowledgeReady, recentRecommendations, listImprovements, recommendationStats } from "../runtime/knowledge/index.js";
@@ -215,6 +216,21 @@ function StatusHeader({ snapshot, connectedIpc, width, startedAt }: { snapshot: 
 					</>
 				) : null}
 			</Box>
+			{/* What / why / blocked / stalled — per-tick observability the bot
+			    already computes (runtimeState, lastReflex, activeSkill, blockedBy,
+			    noProgressReason); assembled by the pure formatStatusSegments helper
+			    so it stays unit-testable off ink. */}
+			{(() => {
+				const segs = formatStatusSegments(snapshot);
+				if (segs.length === 0) return null;
+				return (
+					<Box>
+						{segs.map((s, i) => (
+							<Text key={i} color={s.color} dimColor={s.dimColor} bold={s.bold}>{s.text}</Text>
+						))}
+					</Box>
+				);
+			})()}
 		</Box>
 	);
 }

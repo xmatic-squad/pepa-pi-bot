@@ -17,6 +17,7 @@ const toolPlugin = toolPkg.plugin ?? toolPkg.default?.plugin ?? toolPkg.default 
 import { info, warn } from "./log.js";
 import { digEscapeTunnel } from "./skills/recovery-tunnel-out.js";
 import { findNearestBlockByName } from "./perception.js";
+import { setLocation } from "./locations.js";
 
 // Hard timeout wrapper. Mineflayer goals (pathfinder, pvp targeting) can hang
 // when the goal is unreachable; without a ceiling the whole reflex chain stops.
@@ -364,6 +365,17 @@ export async function sleepInBed(bot) {
 			// have shifted to an adjacent slot for the bed's second half).
 			const placed = findNearestBlockByName(bot, BED_NAMES, { maxDistance: 4 });
 			if (!placed) return { ok: false, detail: "placed bed not found after placement" };
+			// M2 monotonicity: the bot just placed its OWN bed and the carried
+			// item is consumed, so bedSecured()'s carried-item branch no longer
+			// holds. Record the placed bed's location (mirrors choose-base /
+			// place-chest / build-shelter) so the locations.bed branch keeps M2_bed
+			// met and the contract stops looping gather.wool->craft.bed for a bed
+			// that already exists. Recorded before sleep — the bed is in the world
+			// regardless of whether sleeping succeeds; guarded so a store-write
+			// hiccup never breaks the sleep path.
+			try {
+				setLocation("bed", { x: placed.position.x, y: placed.position.y, z: placed.position.z, radius: 1, note: "placed bed" });
+			} catch {}
 			await withTimeout(bot.sleep(placed), 10_000, "bot.sleep(placed)");
 			return { ok: true, detail: { bedAt: placed.position, placed: true, name: carried.name } };
 		} catch (e) {

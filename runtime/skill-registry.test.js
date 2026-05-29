@@ -58,8 +58,18 @@ test("registryPrompt: contains the real ids grouped by namespace", () => {
 	assert.doesNotMatch(txt, /survive\.shelter[^-]/);
 });
 
-test("registryPrompt: respects limit parameter", () => {
+test("registryPrompt: respects limit and preserves the NEVER-invent guardrail when truncating", () => {
 	const short = skillRegistryPrompt({ limit: 200 });
 	assert.ok(short.length <= 200, `expected <=200, got ${short.length}`);
-	assert.ok(short.endsWith("..."));
+	// The skill LIST is truncated (…), but the guardrail footer must always
+	// survive — otherwise a growing registry silently stops telling the LLM
+	// not to hallucinate skill ids.
+	assert.match(short, /\.\.\./, "list should be truncated");
+	assert.match(short, /NEVER invent/, "guardrail footer must survive truncation");
+});
+
+test("registryPrompt: default limit fits the full registry incl. the guardrail footer", () => {
+	const full = skillRegistryPrompt();
+	assert.match(full, /NEVER invent/);
+	assert.doesNotMatch(full, /\n\.\.\.\n/, "default prompt should not be truncated");
 });

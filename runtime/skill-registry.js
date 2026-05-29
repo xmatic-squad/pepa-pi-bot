@@ -45,9 +45,14 @@ export function describeSkill(id) {
 }
 
 // Human-readable block to drop into LLM system prompts. Groups by
-// namespace, lists "id — title (timeoutMs)". Capped at ~2KB to stay
-// well within the model's instruction window.
-export function skillRegistryPrompt({ limit = 2000 } = {}) {
+// namespace, lists "id — title". Capped at ~2KB to stay well within the
+// model's instruction window. When the list overflows the cap we truncate
+// the LIST, never the footer — the footer carries the load-bearing
+// guardrail ("NEVER invent new ids"), the whole reason this prompt exists.
+// A naive tail-slice (the pre-v0.4.1 behaviour) would silently drop that
+// guardrail once the registry grew past the cap, re-opening the exact v0.2
+// skill-id hallucination this module was built to close.
+export function skillRegistryPrompt({ limit = 3000 } = {}) {
 	const { byNamespace } = get();
 	const namespaces = Array.from(byNamespace.keys()).sort();
 	const lines = ["Valid skill ids (USE ONLY THESE for avoid_skill / prefer_skill):"];
@@ -58,10 +63,13 @@ export function skillRegistryPrompt({ limit = 2000 } = {}) {
 			lines.push(`    - ${s.id} — ${s.title ?? s.id}`);
 		}
 	}
-	lines.push("");
-	lines.push("If no listed skill fits, set the field to null. NEVER invent new ids.");
-	const text = lines.join("\n");
-	return text.length > limit ? text.slice(0, limit - 4) + "\n..." : text;
+	const body = lines.join("\n");
+	const footer = "If no listed skill fits, set the field to null. NEVER invent new ids.";
+	const full = `${body}\n\n${footer}`;
+	if (full.length <= limit) return full;
+	const sep = "\n...\n\n";
+	const room = Math.max(0, limit - footer.length - sep.length);
+	return `${body.slice(0, room)}${sep}${footer}`;
 }
 
 // For tests / hot-reload scenarios.

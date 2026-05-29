@@ -172,13 +172,22 @@ export const skill = Object.freeze({
 			}
 		}
 
+		// Closed-loop integrity: a build that placed nothing AND skipped
+		// nothing never established a shelter. Do NOT record a shelter
+		// location in that case — M8_shelter's invariant locationExists(
+		// "shelter") is mere key-presence with no compensating clear, so a
+		// single all-throw build would falsely satisfy the milestone forever.
+		// We record the location only on real progress: placed>0, or skipped>0
+		// (idempotent resume — the blueprint was already satisfied by existing
+		// blocks).
+		if (placed === 0 && skipped === 0) {
+			return { ok: false, code: "no_progress", detail: "could not place any blocks", worldDelta: null };
+		}
+
 		// Record the shelter location so future skills can find it even if
 		// base gets re-scored.
 		setLocation(SHELTER_NAME, { x: center.x, y: center.y, z: center.z, radius: 2, note: `auto-built; ${placed} blocks placed` });
 
-		if (placed === 0 && skipped === 0) {
-			return { ok: false, code: "no_progress", detail: "could not place any blocks", worldDelta: null };
-		}
 		return {
 			ok: true,
 			code: "done",

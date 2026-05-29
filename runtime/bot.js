@@ -805,7 +805,7 @@ function maybeAutoEscalate() {
 		`You are the escalation cortex for an autonomous Minecraft bot. The bot's`,
 		`script-driven reflex loop has produced no useful action for ${ESCALATE_AFTER_NOOPS} consecutive ticks`,
 		`(~${Math.round((ESCALATE_AFTER_NOOPS * config.tickIntervalMs) / 1000)}s). The reflex chain is:`,
-		`  defend > eat > sleep > tech-tree > autonomous > idle`,
+		`  modes(self_preservation/hunger/shelter) > defend > eat > sleep > curriculum > idle (curriculum dispatches the Settlement Contract's chosen skill)`,
 		`Snapshot:`,
 		"```json",
 		promptCtx,

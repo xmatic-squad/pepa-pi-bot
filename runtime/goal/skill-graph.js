@@ -31,6 +31,7 @@ export const SKILL_GRAPH = Object.freeze({
 	"gather.logs": { requires: [], produces: ["logs"] },
 	"gather.wool": { requires: [], produces: ["wool"] },
 	"gather.stone": { requires: [{ tool: "pickaxe" }], produces: ["cobblestone"] },
+	"gather.coal": { requires: [{ tool: "pickaxe" }], produces: ["coal"] },
 	"craft.planks": { requires: [{ item: "logs", min: 1 }], produces: ["planks"] },
 	"craft.sticks": { requires: [{ item: "planks", min: 2 }], produces: ["stick"] },
 	"craft.wooden-axe": { requires: [{ item: "planks", min: 3 }, { item: "stick", min: 2 }], produces: ["wooden_axe"] },

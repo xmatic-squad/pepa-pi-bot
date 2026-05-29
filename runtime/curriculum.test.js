@@ -141,6 +141,28 @@ test("food.basic satisfied by high food bar even without food item", () => {
 	assert.equal(got.milestone.id, "storage.chest");
 });
 
+test("shelter.torch suggests gather.coal when no coal on hand (closes the M6 dead-end)", () => {
+	const inv = {
+		wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+		stone_axe: 1, stone_pickaxe: 1, stone_sword: 1, furnace: 1,
+		red_bed: 1, bread: 2,
+	};
+	const got = nextMilestone(snap(inv, { food: 20, locations: { chest: { x: 1, y: 64, z: 0 } } }));
+	assert.equal(got.milestone.id, "shelter.torch");
+	assert.equal(got.plan.skillId, "gather.coal");
+});
+
+test("shelter.torch suggests craft.torch once coal is on hand", () => {
+	const inv = {
+		wooden_axe: 1, wooden_pickaxe: 1, wooden_sword: 1,
+		stone_axe: 1, stone_pickaxe: 1, stone_sword: 1, furnace: 1,
+		red_bed: 1, bread: 2, coal: 1,
+	};
+	const got = nextMilestone(snap(inv, { food: 20, locations: { chest: { x: 1, y: 64, z: 0 } } }));
+	assert.equal(got.milestone.id, "shelter.torch");
+	assert.equal(got.plan.skillId, "craft.torch");
+});
+
 test("all done → null", () => {
 	const inv = {
 		oak_log: 16, oak_planks: 8, stick: 8,

@@ -41,6 +41,24 @@ test("unknown skill is treated as runnable (known:false)", () => {
 	assert.equal(r.known, false);
 });
 
+test("gather.coal needs a pickaxe and produces coal (closes the M6 dead-end)", () => {
+	assert.equal(canRun("gather.coal", world({})), false);
+	assert.equal(canRun("gather.coal", world({ wooden_pickaxe: 1 })), true);
+	assert.equal(canRun("gather.coal", world({ stone_pickaxe: 1 })), true);
+});
+
+test("craft.torch is blocked without coal but runnable once coal is gathered", () => {
+	assert.equal(canRun("craft.torch", world({ stick: 1 })), false);
+	assert.equal(canRun("craft.torch", world({ stick: 1, coal: 1 })), true);
+	// charcoal counts as coal (semantic group)
+	assert.equal(canRun("craft.torch", world({ stick: 1, charcoal: 1 })), true);
+});
+
+test("runnableFrontier includes gather.coal once a pickaxe is held", () => {
+	assert.ok(!runnableFrontier(world()).includes("gather.coal"));
+	assert.ok(runnableFrontier(world({ wooden_pickaxe: 1 })).includes("gather.coal"));
+});
+
 test("axe matcher excludes pickaxe", () => {
 	assert.equal(_internal.TOOL.axe("wooden_axe"), true);
 	assert.equal(_internal.TOOL.axe("wooden_pickaxe"), false);

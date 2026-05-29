@@ -181,7 +181,16 @@ const MILESTONES = [
 		id: "shelter.torch",
 		title: "Have torches on hand for the perimeter",
 		isDone: (inv) => has(inv, "torch", 4),
-		suggest: () => ({ skillId: "craft.torch" }),
+		// Two-step like wood.planks-and-sticks: torches need coal (or
+		// charcoal), but nothing else produces it — without this the
+		// milestone pinned forever on craft.torch's missing_material. Mine
+		// coal first, then craft. The contract's M6_lighting delegates
+		// suggest() to this milestone, so this edit fixes both rails.
+		suggest: (inv) => {
+			const fuel = (inv?.coal ?? 0) + (inv?.charcoal ?? 0);
+			if (fuel < 1) return { skillId: "gather.coal" };
+			return { skillId: "craft.torch" };
+		},
 	},
 	{
 		id: "village.base-site",
