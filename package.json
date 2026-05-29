@@ -1,6 +1,6 @@
 {
   "name": "pepa-pi-bot",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "An autonomous, self-extending Minecraft player powered by Pi and Mineflayer.",
   "license": "MIT",

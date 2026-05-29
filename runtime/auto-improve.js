@@ -113,6 +113,15 @@ let pollTimer = null;
 
 export function startAutoImprover() {
 	if (pollTimer) return;
+	// Off-switch: the self-patcher commits LLM-generated diffs and checks out
+	// branches, which can leave the working tree on the wrong branch mid-run
+	// (observed 2026-05-28: it checked out a stale local `main`). The research
+	// direction is operator-drained improvement_requests, not auto-apply — so
+	// set PEPA_AUTO_IMPROVE=off to keep proposals on disk without patching.
+	if (String(process.env.PEPA_AUTO_IMPROVE ?? "").toLowerCase() === "off") {
+		info("auto-improve", "disabled via PEPA_AUTO_IMPROVE=off — proposals written but not auto-applied");
+		return;
+	}
 	info("auto-improve", `watching ${PROPOSALS_DIR} (cooldown=${COOLDOWN_MS / 1000}s, max ${MAX_TOTAL_PER_HOUR}/hr)`);
 	pollTimer = setInterval(tick, 2000);
 }
