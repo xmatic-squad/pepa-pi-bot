@@ -1,0 +1,266 @@
+{
+  "gather.logs": {
+    "ok": 55,
+    "fail": 122,
+    "lastTs": 1779952694275,
+    "lastCode": "timeout",
+    "lastDurationMs": 62051,
+    "totalDurationMs": 7620662
+  },
+  "wander": {
+    "ok": 120,
+    "fail": 400,
+    "lastTs": 1779960695691,
+    "lastCode": "done",
+    "lastDurationMs": 174520,
+    "totalDurationMs": 6269071
+  },
+  "explore.far": {
+    "ok": 2208,
+    "fail": 1536,
+    "lastTs": 1779961085424,
+    "lastCode": "timeout",
+    "lastDurationMs": 90021,
+    "totalDurationMs": 46115701
+  },
+  "recovery.tunnel-out": {
+    "ok": 38,
+    "fail": 187,
+    "lastTs": 1779961436417,
+    "lastCode": "wedged",
+    "lastDurationMs": 2588,
+    "totalDurationMs": 4106772
+  },
+  "attack zombie": {
+    "ok": 34,
+    "fail": 66,
+    "lastTs": 1779952608404,
+    "lastCode": "hostile_still_near",
+    "lastDurationMs": 3291,
+    "totalDurationMs": 190060
+  },
+  "flee from zombie": {
+    "ok": 4,
+    "fail": 94,
+    "lastTs": 1779951420083,
+    "lastCode": "timeout",
+    "lastDurationMs": 37053,
+    "totalDurationMs": 2830611
+  },
+  "attack drowned": {
+    "ok": 10,
+    "fail": 15,
+    "lastTs": 1779881719294,
+    "lastCode": "hostile_still_near",
+    "lastDurationMs": 3344,
+    "totalDurationMs": 40858
+  },
+  "flee from drowned": {
+    "ok": 0,
+    "fail": 64,
+    "lastTs": 1779888953259,
+    "lastCode": "timeout",
+    "lastDurationMs": 30089,
+    "totalDurationMs": 1914257
+  },
+  "survive.flee": {
+    "ok": 4,
+    "fail": 71,
+    "lastTs": 1779960760403,
+    "lastCode": "stuck",
+    "lastDurationMs": 11079,
+    "totalDurationMs": 1742016
+  },
+  "flee from skeleton": {
+    "ok": 2,
+    "fail": 65,
+    "lastTs": 1779948570425,
+    "lastCode": "timeout",
+    "lastDurationMs": 37011,
+    "totalDurationMs": 2033525
+  },
+  "flee from spider": {
+    "ok": 4,
+    "fail": 25,
+    "lastTs": 1779951627557,
+    "lastCode": "done",
+    "lastDurationMs": 7225,
+    "totalDurationMs": 815204
+  },
+  "attack skeleton": {
+    "ok": 11,
+    "fail": 9,
+    "lastTs": 1779948471101,
+    "lastCode": "no_target",
+    "lastDurationMs": 704,
+    "totalDurationMs": 45795
+  },
+  "flee from creeper": {
+    "ok": 3,
+    "fail": 44,
+    "lastTs": 1779948015270,
+    "lastCode": "timeout",
+    "lastDurationMs": 37025,
+    "totalDurationMs": 1368266
+  },
+  "attack creeper": {
+    "ok": 17,
+    "fail": 21,
+    "lastTs": 1779949854216,
+    "lastCode": "done",
+    "lastDurationMs": 2029,
+    "totalDurationMs": 41966
+  },
+  "flee from enderman": {
+    "ok": 1,
+    "fail": 21,
+    "lastTs": 1779952594115,
+    "lastCode": "timeout",
+    "lastDurationMs": 37020,
+    "totalDurationMs": 649095
+  },
+  "attack spider": {
+    "ok": 7,
+    "fail": 269,
+    "lastTs": 1779951473733,
+    "lastCode": "hostile_still_near",
+    "lastDurationMs": 3528,
+    "totalDurationMs": 54422
+  },
+  "attack enderman": {
+    "ok": 0,
+    "fail": 2,
+    "lastTs": 1779883311290,
+    "lastCode": "hostile_still_near",
+    "lastDurationMs": 3371,
+    "totalDurationMs": 4120
+  },
+  "flee from witch": {
+    "ok": 0,
+    "fail": 2,
+    "lastTs": 1779878325865,
+    "lastCode": "timeout",
+    "lastDurationMs": 30008,
+    "totalDurationMs": 60053
+  },
+  "survive.pillar-up": {
+    "ok": 0,
+    "fail": 199,
+    "lastTs": 1779961367632,
+    "lastCode": "no_progress",
+    "lastDurationMs": 12158,
+    "totalDurationMs": 5515785
+  },
+  "survive.acquire-food": {
+    "ok": 0,
+    "fail": 123,
+    "lastTs": 1779948857447,
+    "lastCode": "already_have",
+    "lastDurationMs": 1,
+    "totalDurationMs": 68883
+  },
+  "survive.sleep": {
+    "ok": 0,
+    "fail": 4,
+    "lastTs": 1779948392381,
+    "lastCode": "daytime",
+    "lastDurationMs": 0,
+    "totalDurationMs": 1
+  },
+  "explore.wander": {
+    "ok": 90,
+    "fail": 77,
+    "lastTs": 1779952509376,
+    "lastCode": "failed",
+    "lastDurationMs": 18316,
+    "totalDurationMs": 2556361
+  },
+  "diag.scan": {
+    "ok": 2,
+    "fail": 0,
+    "lastTs": 1779952108067,
+    "lastCode": "scan_done",
+    "lastDurationMs": 1175,
+    "totalDurationMs": 2764
+  },
+  "village.relocate": {
+    "ok": 0,
+    "fail": 6,
+    "lastTs": 1779961426942,
+    "lastCode": "stuck_in_place",
+    "lastDurationMs": 56464,
+    "totalDurationMs": 586374
+  },
+  "survive.scout-food": {
+    "ok": 1,
+    "fail": 44,
+    "lastTs": 1779949085516,
+    "lastCode": "already_have",
+    "lastDurationMs": 1,
+    "totalDurationMs": 326284
+  },
+  "survive.eat": {
+    "ok": 3,
+    "fail": 0,
+    "lastTs": 1779946551109,
+    "lastCode": "done",
+    "lastDurationMs": 1630,
+    "totalDurationMs": 4901
+  },
+  "eat": {
+    "ok": 3,
+    "fail": 0,
+    "lastTs": 1779946560105,
+    "lastCode": "done",
+    "lastDurationMs": 1637,
+    "totalDurationMs": 4896
+  },
+  "gather.wool": {
+    "ok": 0,
+    "fail": 15,
+    "lastTs": 1779951016664,
+    "lastCode": "no_path",
+    "lastDurationMs": 30030,
+    "totalDurationMs": 439630
+  },
+  "craft.planks": {
+    "ok": 1,
+    "fail": 0,
+    "lastTs": 1779950947695,
+    "lastCode": "done",
+    "lastDurationMs": 85,
+    "totalDurationMs": 85
+  },
+  "diag.physics": {
+    "ok": 3,
+    "fail": 0,
+    "lastTs": 1779952458860,
+    "lastCode": "done",
+    "lastDurationMs": 6835,
+    "totalDurationMs": 20477
+  },
+  "survive.dig-in": {
+    "ok": 4,
+    "fail": 6,
+    "lastTs": 1779961089100,
+    "lastCode": "no_progress",
+    "lastDurationMs": 672,
+    "totalDurationMs": 165764
+  },
+  "sleep": {
+    "ok": 0,
+    "fail": 2,
+    "lastTs": 1779961091425,
+    "lastCode": "other",
+    "lastDurationMs": 1,
+    "totalDurationMs": 3
+  },
+  "recovery.escape-pit-safe": {
+    "ok": 0,
+    "fail": 1,
+    "lastTs": 1779960794335,
+    "lastCode": "no_strategy",
+    "lastDurationMs": 1,
+    "totalDurationMs": 1
+  }
+}
